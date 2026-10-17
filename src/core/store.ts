@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { BeadColor, PatternDoc, Snapshot, Tool, ViewFlags } from '../core/types';
 import { DEFAULT_FLAGS } from '../core/types';
-import { palettePreset } from '../core/palette';
+import { DEFAULT_PALETTE_KEY, palettePreset } from '../core/palette';
 import { uid } from '../core/util';
 import { loadDoc, readIndex } from './storage';
 import { createDemoDoc } from './demo';
@@ -45,7 +45,12 @@ function createInitialDoc(): PatternDoc {
   return createDemoDoc();
 }
 
-export function createDoc(width: number, height: number, paletteKey = 'mard', name = '未命名图纸'): PatternDoc {
+export function createDoc(
+  width: number,
+  height: number,
+  paletteKey = DEFAULT_PALETTE_KEY,
+  name = '未命名图纸',
+): PatternDoc {
   const palette = palettePreset(paletteKey);
   return {
     id: uid(),

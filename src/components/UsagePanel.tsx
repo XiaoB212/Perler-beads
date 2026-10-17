@@ -42,7 +42,9 @@ export default function UsagePanel() {
       .filter((r) => r.color)
       .sort((a, b) => b.total - a.total);
     return { rows, total: t, placed: p };
-  }, [doc.cells, doc.progress, doc.palette]);
+    // 依赖整个 doc：cells / progress 是原地修改的 TypedArray，引用不变，
+    // 只用 doc.cells 做依赖会导致勾选进度后统计不刷新。
+  }, [doc]);
 
   const cost = useMemo(() => costSummary(doc, price), [doc, price]);
 
@@ -175,7 +177,7 @@ export default function UsagePanel() {
 
       <div className="panel-head">
         <span className="panel-title">色号明细</span>
-        <span style={{ fontSize: 10.5, color: 'var(--text-mute)' }}>
+        <span style={{ fontSize: 10.5, color: 'var(--ink-3)' }}>
           {mode === 'cost' ? '点开改单价与库存' : '点击切换当前色'}
         </span>
       </div>

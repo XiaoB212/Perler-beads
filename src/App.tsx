@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useEditor } from './core/store';
+import { applyTheme, getThemeMode, resolveTheme, setThemeMode as setThemeModePersist, watchSystemTheme, type ThemeMode } from './core/theme';
 import CanvasStage from './components/CanvasStage';
 import ColorPanel from './components/ColorPanel';
 import UsagePanel from './components/UsagePanel';
@@ -31,6 +32,8 @@ import {
   IconRect,
   IconRedo,
   IconSettings,
+  IconSun,
+  IconMoon,
   IconUndo,
   IconUpload,
 } from './components/Icons';
@@ -41,15 +44,20 @@ import { readIndex, saveDoc } from './core/storage';
 type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors';
 type SideTab = 'colors' | 'usage' | 'settings';
 
-const TOOLS: { key: Tool; label: string; icon: (p: { width: number; height: number }) => JSX.Element }[] = [
-  { key: 'pencil', label: '画笔', icon: (p) => <IconPencil {...p} /> },
-  { key: 'eraser', label: '橡皮', icon: (p) => <IconEraser {...p} /> },
-  { key: 'bucket', label: '填充', icon: (p) => <IconBucket {...p} /> },
-  { key: 'line', label: '直线', icon: (p) => <IconLine {...p} /> },
-  { key: 'rect', label: '矩形', icon: (p) => <IconRect {...p} /> },
-  { key: 'ellipse', label: '椭圆', icon: (p) => <IconEllipse {...p} /> },
-  { key: 'picker', label: '吸管', icon: (p) => <IconPicker {...p} /> },
-  { key: 'pan', label: '平移', icon: (p) => <IconHand {...p} /> },
+const TOOLS: {
+  key: Tool;
+  label: string;
+  hint?: string;
+  icon: (p: { width: number; height: number }) => JSX.Element;
+}[] = [
+  { key: 'pencil', label: '画笔', hint: '(B)', icon: (p) => <IconPencil {...p} /> },
+  { key: 'eraser', label: '橡皮', hint: '(E)', icon: (p) => <IconEraser {...p} /> },
+  { key: 'bucket', label: '填充', hint: '(G)', icon: (p) => <IconBucket {...p} /> },
+  { key: 'line', label: '直线', hint: '(L)', icon: (p) => <IconLine {...p} /> },
+  { key: 'rect', label: '矩形', hint: '(R)', icon: (p) => <IconRect {...p} /> },
+  { key: 'ellipse', label: '椭圆', hint: '(O)', icon: (p) => <IconEllipse {...p} /> },
+  { key: 'picker', label: '吸管', hint: '(I)', icon: (p) => <IconPicker {...p} /> },
+  { key: 'pan', label: '平移', hint: '(H)', icon: (p) => <IconHand {...p} /> },
 ];
 
 const TOOL_KEYS: Record<string, Tool> = {
@@ -87,8 +95,28 @@ export default function App() {
   const [titleDraft, setTitleDraft] = useState(doc.name);
   const [dropped, setDropped] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
+  const [resolved, setResolved] = useState(() => resolveTheme(getThemeMode()));
 
   useEffect(() => setTitleDraft(doc.name), [doc.name, doc.id]);
+
+  // 主题：写 localStorage + 挂 <html data-theme>，并跟随系统切换
+  const setThemeMode = useCallback((m: ThemeMode) => {
+    setThemeModeState(m);
+    setThemeModePersist(m);
+  }, []);
+
+  useEffect(() => {
+    applyTheme(themeMode);
+    setResolved(resolveTheme(themeMode));
+    return watchSystemTheme();
+  }, [themeMode]);
+
+  const cycleTheme = useCallback(() => {
+    setThemeMode(themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto');
+  }, [setThemeMode, themeMode]);
+
+  const themeTitle = themeMode === 'auto' ? '跟随系统' : themeMode === 'light' ? '亮色' : '暗色';
 
   const beadCount = useMemo(() => totalBeads(doc), [doc]);
 
@@ -233,7 +261,7 @@ export default function App() {
   const sideBody = (t: SideTab) => {
     if (t === 'colors') return <ColorPanel onOpenManager={() => setDialog('colors')} />;
     if (t === 'usage') return <UsagePanel />;
-    return <SettingsPanel />;
+    return <SettingsPanel themeMode={themeMode} onThemeChange={setThemeMode} />;
   };
 
   return (
@@ -244,10 +272,10 @@ export default function App() {
         <header className="app-header">
           <div className="brand">
             <div className="brand-mark">
-              <i style={{ color: '#ff8a3d' }} />
-              <i style={{ color: '#4dd4ff' }} />
-              <i style={{ color: '#7c5cff' }} />
-              <i style={{ color: '#38e08b' }} />
+              <i />
+              <i />
+              <i />
+              <i />
             </div>
             <div className="brand-text">
               <b>拼豆工作室</b>
@@ -282,6 +310,15 @@ export default function App() {
               <IconRedo width={16} height={16} />
             </button>
             <div className="vdivider hide-md" />
+            <button
+              className="btn ghost icon"
+              onClick={cycleTheme}
+              title={`主题：${themeTitle}（点击切换）`}
+              aria-label="切换主题"
+            >
+              {resolved === 'dark' ? <IconMoon width={15} height={15} /> : <IconSun width={15} height={15} />}
+            </button>
+            <div className="vdivider hide-md" />
             <button className="btn sm hide-sm" onClick={() => setDialog('new')} title="新建图纸 (N)">
               <IconPlus width={13} height={13} /> 新建
             </button>
@@ -305,9 +342,10 @@ export default function App() {
                 key={t.key}
                 className={'rail-btn' + (tool === t.key ? ' active' : '')}
                 onClick={() => setTool(t.key)}
-                title={t.label}
+                title={`${t.label}${t.hint ? ' ' + t.hint : ''}`}
               >
-                <t.icon width={18} height={18} />
+                <t.icon width={17} height={17} />
+                <span className="rail-label">{t.label}</span>
               </button>
             ))}
             <div className="rail-sep" />
@@ -316,7 +354,8 @@ export default function App() {
               onClick={() => setTool('pan')}
               title="平移画布（空格）"
             >
-              <IconHand width={18} height={18} />
+              <IconHand width={17} height={17} />
+              <span className="rail-label">平移</span>
             </button>
             <div className="rail-sep" />
             <button
@@ -324,42 +363,46 @@ export default function App() {
               onClick={() => toggleFlag('progressMode')}
               title="进度模式：点击勾选已拼好的豆子 (P)"
             >
-              <IconCheck width={18} height={18} />
+              <IconCheck width={17} height={17} />
+              <span className="rail-label">进度</span>
             </button>
             <button
               className={'rail-btn' + (flags.grid ? ' active' : '')}
               onClick={() => toggleFlag('grid')}
               title="网格线"
             >
-              <IconGrid width={18} height={18} />
+              <IconGrid width={17} height={17} />
+              <span className="rail-label">网格</span>
             </button>
             <button
               className={'rail-btn' + (flags.symmetryX ? ' active' : '')}
               onClick={() => toggleFlag('symmetryX')}
               title="左右对称"
             >
-              <IconLayers width={18} height={18} />
+              <IconLayers width={17} height={17} />
+              <span className="rail-label">对称</span>
             </button>
             <div className="rail-sep" />
             <button className="rail-btn" onClick={() => setDialog('colors')} title="色号管理">
-              <IconPalette width={18} height={18} />
+              <IconPalette width={17} height={17} />
+              <span className="rail-label">色号</span>
             </button>
             <button className="rail-btn" onClick={() => setDialog('projects')} title="我的图纸">
-              <IconBoard width={18} height={18} />
+              <IconBoard width={17} height={17} />
             </button>
           </nav>
 
           <div className="workspace">
-            <CanvasStage doc={doc} />
+            <CanvasStage doc={doc} theme={resolved} />
 
             {beadCount === 0 && (
               <div className="empty-state">
                 <div className="empty-card">
                   <div className="empty-mark">
-                    <i style={{ color: '#ff8a3d' }} />
-                    <i style={{ color: '#4dd4ff' }} />
-                    <i style={{ color: '#7c5cff' }} />
-                    <i style={{ color: '#38e08b' }} />
+                    <i />
+                    <i />
+                    <i />
+                    <i />
                   </div>
                   <h3>从一张图片开始，或者直接落笔</h3>
                   <p>
@@ -399,6 +442,13 @@ export default function App() {
               </button>
               <button className={'tbar-chip' + (flags.symmetryY ? ' on' : '')} onClick={() => toggleFlag('symmetryY')}>
                 对称Y
+              </button>
+              <button
+                className={'tbar-chip' + (flags.showCodes ? ' on' : '')}
+                onClick={() => toggleFlag('showCodes')}
+                title="在每颗豆子上显示色号，放大到 120% 以上才看得清"
+              >
+                色号
               </button>
               <div className="vdivider" style={{ margin: '0 2px' }} />
               <span className="tbar-chip" style={{ cursor: 'default' }}>
@@ -453,7 +503,7 @@ export default function App() {
                   height: 17,
                   borderRadius: 5,
                   background: cur?.hex ?? '#fff',
-                  boxShadow: 'inset 0 0 0 1.5px rgba(255,255,255,.9)',
+                  boxShadow: 'inset 0 0 0 1.5px var(--ring)',
                 }}
               />
               颜色

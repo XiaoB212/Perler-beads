@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, bresenham } from '../core/store';
+import { stageColors, type ResolvedTheme } from '../core/theme';
+import { readableTextColor } from '../core/color';
 import type { PatternDoc } from '../core/types';
 
 interface Props {
   doc: PatternDoc;
+  theme?: ResolvedTheme;
 }
 
 type DragMode = 'paint' | 'erase' | 'pan' | 'shape' | 'progress' | null;
@@ -20,10 +23,11 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
   ctx.closePath();
 }
 
-export default function CanvasStage({ doc }: Props) {
+export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const overlayRef = useRef<HTMLCanvasElement>(null);
+  const C = useMemo(() => stageColors(theme), [theme]);
   // 初始为 0：必须等 ResizeObserver 量到真实尺寸再画/适配，
   // 否则会用假尺寸算「适应窗口」，在手机上把图纸裁掉
   const [size, setSize] = useState({ w: 0, h: 0 });
@@ -141,10 +145,10 @@ export default function CanvasStage({ doc }: Props) {
 
     // 画布底板阴影
     ctx.save();
-    ctx.shadowColor = 'rgba(0,0,0,0.55)';
-    ctx.shadowBlur = 34;
-    ctx.shadowOffsetY = 12;
-    ctx.fillStyle = '#1b2033';
+    ctx.shadowColor = C.shadow;
+    ctx.shadowBlur = 30;
+    ctx.shadowOffsetY = 10;
+    ctx.fillStyle = C.board;
     roundRect(ctx, originX - 3, originY - 3, boardW + 6, boardH + 6, 8);
     ctx.fill();
     ctx.restore();
@@ -170,6 +174,9 @@ export default function CanvasStage({ doc }: Props) {
     const checks = new Path2D();
     const holeR = Math.max(0.9, cell * 0.14);
     const drawHoles = flags.beadHoles && cell >= 8;
+    // 色号：格子在屏幕上够大才画得下，否则会糊成一团
+    const drawCodes = flags.showCodes && cell >= 17;
+    const codeCells: { x: number; y: number; code: string; hex: string }[] = [];
     const emptyEven = new Path2D();
     const emptyOdd = new Path2D();
     for (let y = vy0; y <= vy1; y++) {
@@ -198,6 +205,7 @@ export default function CanvasStage({ doc }: Props) {
           holes.moveTo(hx + holeR, hy);
           holes.arc(hx, hy, holeR, 0, Math.PI * 2);
         }
+        if (drawCodes && !dim) codeCells.push({ x: px, y: py, code: c.code, hex: c.hex });
         if (placed && flags.progressMode) {
           checks.moveTo(px + cell * 0.22, py + cell * 0.52);
           checks.lineTo(px + cell * 0.42, py + cell * 0.74);
@@ -205,9 +213,9 @@ export default function CanvasStage({ doc }: Props) {
         }
       }
     }
-    ctx.fillStyle = '#20263a';
+    ctx.fillStyle = C.emptyA;
     ctx.fill(emptyEven);
-    ctx.fillStyle = '#1c2134';
+    ctx.fillStyle = C.emptyB;
     ctx.fill(emptyOdd);
     for (const [hex, p] of byColor) {
       ctx.fillStyle = hex;
@@ -220,14 +228,23 @@ export default function CanvasStage({ doc }: Props) {
     }
     ctx.globalAlpha = 1;
     if (drawHoles) {
-      ctx.fillStyle = 'rgba(255,255,255,0.72)';
+      ctx.fillStyle = C.hole;
       ctx.fill(holes);
-      ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+      ctx.strokeStyle = theme === 'light' ? 'rgba(20,24,30,0.1)' : 'rgba(0,0,0,0.18)';
       ctx.lineWidth = Math.max(0.4, cell * 0.035);
       ctx.stroke(holes);
     }
+    if (drawCodes && codeCells.length) {
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = `600 ${Math.round(Math.min(cell * 0.42, 13))}px ui-monospace, monospace`;
+      for (const cc of codeCells) {
+        ctx.fillStyle = readableTextColor(cc.hex);
+        ctx.fillText(cc.code, cc.x + cell / 2, cc.y + cell * (drawHoles ? 0.72 : 0.52));
+      }
+    }
     if (flags.progressMode) {
-      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.strokeStyle = C.check;
       ctx.lineWidth = Math.max(1.2, cell * 0.09);
       ctx.stroke(checks);
     }
@@ -236,7 +253,7 @@ export default function CanvasStage({ doc }: Props) {
     // 网格
     if (flags.grid && cell >= 4) {
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255,255,255,0.09)';
+      ctx.strokeStyle = C.grid;
       ctx.lineWidth = 1;
       for (let x = 0; x <= doc.width; x++) {
         const px = Math.round(originX + x * cell) + 0.5;
@@ -251,7 +268,7 @@ export default function CanvasStage({ doc }: Props) {
       ctx.stroke();
       // 每 5 格
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+      ctx.strokeStyle = C.gridStrong;
       ctx.lineWidth = 1;
       for (let x = 0; x <= doc.width; x += 5) {
         const px = Math.round(originX + x * cell) + 0.5;
@@ -269,7 +286,7 @@ export default function CanvasStage({ doc }: Props) {
     // 拼豆板分界
     if (flags.pegboard && doc.pegboard > 0) {
       ctx.beginPath();
-      ctx.strokeStyle = 'rgba(255, 138, 61, 0.55)';
+      ctx.strokeStyle = C.pegboard;
       ctx.lineWidth = 1.6;
       ctx.setLineDash([6, 4]);
       for (let x = doc.pegboard; x < doc.width; x += doc.pegboard) {
@@ -288,7 +305,7 @@ export default function CanvasStage({ doc }: Props) {
 
     // 对称轴
     if (flags.symmetryX || flags.symmetryY) {
-      ctx.strokeStyle = 'rgba(77, 212, 255, 0.75)';
+      ctx.strokeStyle = C.symmetry;
       ctx.lineWidth = 1.4;
       ctx.setLineDash([4, 4]);
       ctx.beginPath();
@@ -307,14 +324,14 @@ export default function CanvasStage({ doc }: Props) {
     }
 
     // 外框
-    ctx.strokeStyle = 'rgba(255,255,255,0.22)';
+    ctx.strokeStyle = C.gridStrong;
     ctx.lineWidth = 1.5;
     roundRect(ctx, originX - 0.5, originY - 0.5, boardW + 1, boardH + 1, 6);
     ctx.stroke();
 
     // 标尺
     if (flags.rulers && cell >= 6) {
-      ctx.fillStyle = 'rgba(154,164,191,0.85)';
+      ctx.fillStyle = C.ruler;
       ctx.font = '500 9.5px ui-monospace, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
@@ -342,7 +359,7 @@ export default function CanvasStage({ doc }: Props) {
       }
       void stepX;
     }
-  }, [doc, size, cell, originX, originY, flags]);
+  }, [doc, size, cell, originX, originY, flags, C, theme]);
 
   // ===== 覆盖层（光标 / 形状预览） =====
   useEffect(() => {
@@ -369,38 +386,42 @@ export default function CanvasStage({ doc }: Props) {
       const minY = Math.min(y0, y1);
       const w = Math.abs(x1 - x0) + 1;
       const h = Math.abs(y1 - y0) + 1;
-      ctx.fillStyle = 'rgba(255, 138, 61, 0.22)';
+      ctx.fillStyle = theme === 'light' ? 'rgba(217,84,30,0.16)' : 'rgba(255,138,76,0.2)';
       ctx.fillRect(originX + minX * cell, originY + minY * cell, w * cell, h * cell);
-      ctx.strokeStyle = 'rgba(255, 168, 110, 0.95)';
+      ctx.strokeStyle = theme === 'light' ? 'rgba(217,84,30,0.9)' : 'rgba(255,168,110,0.95)';
       ctx.lineWidth = 1.6;
       ctx.strokeRect(originX + minX * cell + 0.5, originY + minY * cell + 0.5, w * cell - 1, h * cell - 1);
     }
 
+    const accentLine = theme === 'light' ? 'rgba(217,84,30,0.95)' : 'rgba(255,138,76,0.95)';
+    const cursorLine = theme === 'light' ? 'rgba(20,24,30,0.75)' : 'rgba(255,255,255,0.92)';
+    const symLine = theme === 'light' ? 'rgba(20,140,160,0.6)' : 'rgba(77,212,255,0.55)';
+
     if (hover && inBounds(hover.x, hover.y) && tool !== 'pan') {
       const r = Math.floor((brushSize - 1) / 2);
       if (tool === 'bucket') {
-        drawCellRect(hover.x, hover.y, 'rgba(77, 212, 255, 0.95)');
+        drawCellRect(hover.x, hover.y, accentLine);
       } else if (tool === 'picker') {
-        drawCellRect(hover.x, hover.y, 'rgba(124, 92, 255, 0.95)');
+        drawCellRect(hover.x, hover.y, theme === 'light' ? 'rgba(90,60,190,0.9)' : 'rgba(150,124,255,0.95)');
       } else if (tool === 'pencil' || tool === 'eraser' || tool === 'line' || tool === 'move') {
         const x0 = Math.max(0, hover.x - r);
         const y0 = Math.max(0, hover.y - r);
         const x1 = Math.min(doc.width - 1, hover.x + r);
         const y1 = Math.min(doc.height - 1, hover.y + r);
-        drawCellRect(x0, y0, tool === 'eraser' ? 'rgba(255,92,108,0.95)' : 'rgba(255,255,255,0.92)', x1 - x0 + 1, y1 - y0 + 1);
+        drawCellRect(x0, y0, tool === 'eraser' ? 'rgba(255,92,108,0.95)' : cursorLine, x1 - x0 + 1, y1 - y0 + 1);
         if (flags.symmetryX) {
           const sx = doc.width - 1 - hover.x;
-          drawCellRect(sx - (x1 - hover.x), y0, 'rgba(77,212,255,0.55)', x1 - x0 + 1, y1 - y0 + 1);
+          drawCellRect(sx - (x1 - hover.x), y0, symLine, x1 - x0 + 1, y1 - y0 + 1);
         }
         if (flags.symmetryY) {
           const sy = doc.height - 1 - hover.y;
-          drawCellRect(x0, sy - (y1 - hover.y), 'rgba(77,212,255,0.55)', x1 - x0 + 1, y1 - y0 + 1);
+          drawCellRect(x0, sy - (y1 - hover.y), symLine, x1 - x0 + 1, y1 - y0 + 1);
         }
       } else {
-        drawCellRect(hover.x, hover.y, 'rgba(255,255,255,0.8)');
+        drawCellRect(hover.x, hover.y, cursorLine);
       }
     }
-  }, [hover, shapePreview, size, originX, originY, cell, tool, brushSize, flags, doc.width, doc.height]);
+  }, [hover, shapePreview, size, originX, originY, cell, tool, brushSize, flags, doc.width, doc.height, theme]);
 
   // ===== 交互 =====
   const startPaint = (x: number, y: number, shift: boolean) => {

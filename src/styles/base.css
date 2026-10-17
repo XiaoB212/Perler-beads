@@ -1,34 +1,113 @@
+/* ============================================================
+   设计 token：亮 / 暗双主题
+   暗色走中性灰（不是蓝紫），亮色走暖白纸感。
+   强调色只用一支暖橙，其余全部靠层级与留白撑起质感。
+   ============================================================ */
+
 :root {
-  --bg: #0b0d16;
-  --bg-soft: #111524;
-  --panel: rgba(20, 25, 40, 0.72);
-  --panel-solid: #151a2b;
-  --panel-border: rgba(255, 255, 255, 0.08);
-  --panel-border-strong: rgba(255, 255, 255, 0.14);
-  --text: #eef2ff;
-  --text-dim: #9aa4bf;
-  --text-mute: #6b7699;
-  --accent: #ff8a3d;
-  --accent-2: #ff4d8d;
-  --accent-3: #7c5cff;
-  --accent-4: #38e08b;
-  --accent-5: #4dd4ff;
-  --grad: linear-gradient(135deg, #ff8a3d 0%, #ff4d8d 55%, #7c5cff 100%);
-  --grad-soft: linear-gradient(135deg, rgba(255, 138, 61, 0.16), rgba(124, 92, 255, 0.16));
-  --danger: #ff5c6c;
-  --ok: #38e08b;
-  --radius: 14px;
-  --radius-sm: 9px;
-  --radius-lg: 20px;
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
-  --shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
-  --shadow-3: 0 24px 64px -16px rgba(0, 0, 0, 0.75), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
-  --glow: 0 0 0 1px rgba(255, 138, 61, 0.35), 0 6px 22px -6px rgba(255, 77, 141, 0.45);
+  /* 尺寸 */
+  --radius: 12px;
+  --radius-sm: 8px;
+  --radius-lg: 18px;
+  --header-h: 56px;
+
+  /* 字体 */
   --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
     'Microsoft YaHei', 'Noto Sans SC', sans-serif;
   --mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
-  --header-h: 58px;
+
+  /* 强调色（品牌橙）：两个主题共用色相，只调明度 */
+  --accent: #e2622a;
+  --accent-hover: #cf5520;
+  --accent-soft: rgba(226, 98, 42, 0.12);
+  --accent-line: rgba(226, 98, 42, 0.42);
+  --accent-ink: #ffffff;
+  --accent-4: #2f9e63;
+
+  /* 语义色 */
+  --danger: #d93a4a;
+  --ok: #2f9e63;
+  --warn: #c07a12;
+}
+
+/* ---------------- 暗色 ---------------- */
+:root,
+[data-theme='dark'] {
   color-scheme: dark;
+
+  --bg: #0e1013;
+  --bg-elev: #14161a;
+  --surface: #17191e;
+  --surface-2: #1d2026;
+  --surface-3: #23262d;
+
+  --line: #262a31;
+  --line-strong: #363b45;
+
+  --ink: #eceef2;
+  --ink-2: #9ba1ad;
+  --ink-3: #6b7280;
+
+  /* 半透明填充：叠在任意底色上都成立 */
+  --fill-1: rgba(255, 255, 255, 0.035);
+  --fill-2: rgba(255, 255, 255, 0.062);
+  --fill-3: rgba(255, 255, 255, 0.1);
+  --fill-4: rgba(255, 255, 255, 0.14);
+  --sunken: rgba(0, 0, 0, 0.26);
+  --ring: rgba(255, 255, 255, 0.9);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 18px -8px rgba(0, 0, 0, 0.7), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-3: 0 20px 52px -18px rgba(0, 0, 0, 0.85), 0 6px 16px -8px rgba(0, 0, 0, 0.55);
+
+  --accent: #ff8a4c;
+  --accent-hover: #ff9c66;
+  --accent-soft: rgba(255, 138, 76, 0.14);
+  --accent-line: rgba(255, 138, 76, 0.45);
+  --accent-ink: #1b0f06;
+
+  --danger: #ff6b78;
+  --ok: #45cf85;
+  --warn: #f0b352;
+}
+
+/* ---------------- 亮色 ---------------- */
+[data-theme='light'] {
+  color-scheme: light;
+
+  --bg: #f6f6f3;
+  --bg-elev: #ffffff;
+  --surface: #ffffff;
+  --surface-2: #f2f2ee;
+  --surface-3: #e9e9e3;
+
+  --line: #e3e3dd;
+  --line-strong: #cfcfc7;
+
+  --ink: #1b1d21;
+  --ink-2: #5b6068;
+  --ink-3: #8b9099;
+
+  --fill-1: rgba(20, 24, 30, 0.032);
+  --fill-2: rgba(20, 24, 30, 0.055);
+  --fill-3: rgba(20, 24, 30, 0.085);
+  --fill-4: rgba(20, 24, 30, 0.12);
+  --sunken: rgba(20, 24, 30, 0.045);
+  --ring: rgba(255, 255, 255, 0.95);
+
+  --shadow-1: 0 1px 2px rgba(28, 26, 20, 0.07);
+  --shadow-2: 0 6px 18px -8px rgba(28, 26, 20, 0.18), 0 1px 3px rgba(28, 26, 20, 0.07);
+  --shadow-3: 0 20px 52px -18px rgba(28, 26, 20, 0.28), 0 6px 16px -8px rgba(28, 26, 20, 0.12);
+
+  --accent: #d9541e;
+  --accent-hover: #bd4716;
+  --accent-soft: rgba(217, 84, 30, 0.1);
+  --accent-line: rgba(217, 84, 30, 0.38);
+  --accent-ink: #ffffff;
+
+  --danger: #c92a3a;
+  --ok: #1f8a52;
+  --warn: #a8680a;
 }
 
 * {
@@ -47,12 +126,16 @@ body,
 body {
   font-family: var(--font);
   background: var(--bg);
-  color: var(--text);
+  color: var(--ink);
   font-size: 14px;
   line-height: 1.5;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
+  transition: background-color 0.18s ease, color 0.18s ease;
+  /* 全站数字等宽：色号、颗数、坐标不再随位数左右跳动 */
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
 }
 
 button {
@@ -73,46 +156,47 @@ textarea {
 }
 
 ::-webkit-scrollbar {
-  width: 9px;
-  height: 9px;
+  width: 10px;
+  height: 10px;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.13);
+  background: var(--fill-4);
   border-radius: 99px;
-  border: 2px solid transparent;
+  border: 3px solid transparent;
   background-clip: content-box;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(255, 255, 255, 0.24);
+  background: var(--line-strong);
   background-clip: content-box;
 }
 
-/* 背景光晕 */
+/* 背景：纯净底色 + 极淡的点阵，不做彩色光晕 */
 .app-bg {
   position: fixed;
   inset: 0;
   z-index: 0;
   pointer-events: none;
-  background:
-    radial-gradient(1100px 620px at 8% -12%, rgba(255, 138, 61, 0.13), transparent 62%),
-    radial-gradient(900px 560px at 96% 4%, rgba(124, 92, 255, 0.16), transparent 60%),
-    radial-gradient(760px 520px at 60% 108%, rgba(77, 212, 255, 0.09), transparent 62%),
-    linear-gradient(180deg, #0b0d16 0%, #0a0c14 100%);
+  background: var(--bg);
 }
 
 .app-bg::after {
   content: '';
   position: absolute;
   inset: 0;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
-  background-size: 26px 26px;
-  mask-image: radial-gradient(900px 600px at 50% 30%, #000 0%, transparent 78%);
-  -webkit-mask-image: radial-gradient(900px 600px at 50% 30%, #000 0%, transparent 78%);
+  background-image: radial-gradient(var(--fill-2) 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.55;
+}
+
+/* 亮色下点阵容易显脏，压到几乎看不见 */
+[data-theme='light'] .app-bg::after {
+  opacity: 0.22;
 }
 
 ::selection {
-  background: rgba(255, 138, 61, 0.32);
+  background: var(--accent-soft);
+  color: var(--ink);
 }

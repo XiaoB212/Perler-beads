@@ -299,3 +299,22 @@ export const IconInfo = (p: P) => (
     <path d="M12 11v5.5M12 7.8v.4" />
   </svg>
 );
+
+export const IconSun = (p: P) => (
+  <svg {...base(p)}>
+    <circle cx="12" cy="12" r="4.2" />
+    <path d="M12 2.6v2.2M12 19.2v2.2M2.6 12h2.2M19.2 12h2.2M5.3 5.3l1.6 1.6M17.1 17.1l1.6 1.6M18.7 5.3l-1.6 1.6M6.9 17.1l-1.6 1.6" />
+  </svg>
+);
+
+export const IconMoon = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M20 13.4A8.2 8.2 0 0 1 10.6 4a8.4 8.4 0 1 0 9.4 9.4Z" />
+  </svg>
+);
+
+export const IconCode = (p: P) => (
+  <svg {...base(p)}>
+    <path d="M9 8 5 12l4 4M15 8l4 4-4 4" />
+  </svg>
+);

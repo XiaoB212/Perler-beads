@@ -5,10 +5,7 @@
   min-height: 0;
   min-width: 0;
   overflow: hidden;
-  background:
-    radial-gradient(700px 500px at 50% 0%, rgba(124, 92, 255, 0.07), transparent 70%),
-    radial-gradient(600px 400px at 90% 100%, rgba(77, 212, 255, 0.05), transparent 70%),
-    #0a0c14;
+  background: var(--bg);
   touch-action: none;
 }
 .stage-canvas,
@@ -21,6 +18,7 @@
   pointer-events: none;
 }
 
+/* 缩放条 */
 .stage-zoombar {
   position: absolute;
   right: 14px;
@@ -29,12 +27,10 @@
   display: flex;
   align-items: center;
   gap: 1px;
-  padding: 4px;
-  border-radius: 11px;
-  background: rgba(16, 20, 33, 0.82);
-  border: 1px solid var(--panel-border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
   box-shadow: var(--shadow-2);
 }
 .zbtn {
@@ -43,24 +39,29 @@
   justify-content: center;
   width: 26px;
   height: 26px;
-  border-radius: 7px;
-  color: var(--text-dim);
-  transition: background 0.14s ease, color 0.14s ease;
+  border-radius: 6px;
+  color: var(--ink-2);
+  transition: background 0.13s ease, color 0.13s ease;
+}
+.zbtn svg {
+  width: 13px;
+  height: 13px;
 }
 .zbtn:hover {
-  background: rgba(255, 255, 255, 0.09);
-  color: var(--text);
+  background: var(--fill-2);
+  color: var(--ink);
 }
 .zbtn:active {
   transform: scale(0.94);
 }
 .zoomval {
-  min-width: 40px;
+  min-width: 42px;
   text-align: center;
   font-family: var(--mono);
   font-size: 11px;
-  color: var(--text-dim);
+  color: var(--ink-2);
   user-select: none;
+  font-variant-numeric: tabular-nums;
 }
 
 .stage-hint {
@@ -71,11 +72,10 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
-  color: var(--text-mute);
+  font-size: 10.5px;
+  color: var(--ink-3);
   pointer-events: none;
   user-select: none;
-  opacity: 0.8;
 }
 
 /* 空状态 */
@@ -93,15 +93,13 @@
 .empty-card {
   /* 卡片本身不拦指针：否则空图纸时画布正中间点不动，第一笔就画不下去 */
   pointer-events: none;
-  max-width: 420px;
-  padding: 30px 32px 24px;
+  max-width: 400px;
+  padding: 28px 30px 22px;
   border-radius: var(--radius-lg);
-  background: rgba(18, 22, 36, 0.78);
-  border: 1px solid var(--panel-border);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: 0 30px 70px -30px rgba(0, 0, 0, 0.9), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-  animation: empty-in 0.42s cubic-bezier(0.22, 1, 0.36, 1);
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-3);
+  animation: empty-in 0.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 .empty-card a,
 .empty-card button {
@@ -109,33 +107,34 @@
 }
 .empty-mark {
   display: grid;
-  grid-template-columns: repeat(2, 13px);
-  gap: 4px;
+  grid-template-columns: repeat(2, 12px);
+  gap: 3px;
   justify-content: center;
-  margin-bottom: 18px;
+  margin-bottom: 16px;
+  color: var(--accent);
 }
 .empty-mark i {
-  width: 13px;
-  height: 13px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   background: currentColor;
-  box-shadow: inset 0 0 0 3.4px #12161f, 0 3px 10px -2px currentColor;
+  box-shadow: inset 0 0 0 3px var(--bg-elev);
 }
 .empty-state h3 {
-  margin: 0 0 9px;
-  font-size: 17.5px;
-  font-weight: 620;
+  margin: 0 0 8px;
+  font-size: 16px;
+  font-weight: 600;
   letter-spacing: -0.01em;
 }
 .empty-state p {
-  margin: 0 0 20px;
-  font-size: 12.5px;
-  line-height: 1.72;
-  color: var(--text-dim);
+  margin: 0 0 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--ink-2);
 }
 .empty-actions {
   display: flex;
-  gap: 8px;
+  gap: 7px;
   justify-content: center;
   flex-wrap: wrap;
 }
@@ -144,11 +143,11 @@
   flex-wrap: wrap;
   gap: 6px 14px;
   justify-content: center;
-  margin-top: 20px;
-  padding-top: 16px;
-  border-top: 1px solid var(--panel-border);
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
   font-size: 10.5px;
-  color: var(--text-mute);
+  color: var(--ink-3);
 }
 .empty-tips span {
   display: inline-flex;
@@ -158,7 +157,7 @@
 @keyframes empty-in {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.97);
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
@@ -175,13 +174,11 @@
   z-index: 8;
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 5px 8px;
-  border-radius: 99px;
-  background: rgba(16, 20, 33, 0.8);
-  border: 1px solid var(--panel-border);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
   box-shadow: var(--shadow-2);
   max-width: calc(100% - 24px);
   overflow-x: auto;
@@ -194,27 +191,31 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  height: 26px;
-  padding: 0 10px;
-  border-radius: 99px;
+  height: 24px;
+  padding: 0 9px;
+  border-radius: 6px;
   font-size: 11.5px;
-  color: var(--text-dim);
+  color: var(--ink-2);
   white-space: nowrap;
-  transition: background 0.14s ease, color 0.14s ease;
+  transition: background 0.13s ease, color 0.13s ease;
 }
 .tbar-chip:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text);
+  background: var(--fill-2);
+  color: var(--ink);
 }
 .tbar-chip.on {
-  background: rgba(255, 138, 61, 0.16);
-  color: #ffc79b;
+  background: var(--accent-soft);
+  color: var(--accent);
 }
 .tbar-chip .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: currentColor;
+}
+.tbar-chip svg {
+  width: 12px;
+  height: 12px;
 }
 
 @media (max-width: 760px) {
@@ -227,8 +228,7 @@
   }
   .stage-topbar {
     top: 8px;
-    gap: 2px;
-    padding: 4px 6px;
+    padding: 3px;
   }
   .tbar-chip {
     padding: 0 8px;
@@ -239,22 +239,22 @@
   .empty-state {
     padding: 12px;
     align-items: flex-start;
-    padding-top: 52px;
+    padding-top: 50px;
   }
   .empty-card {
     max-width: 100%;
     padding: 16px 16px 13px;
-    border-radius: 16px;
+    border-radius: 14px;
   }
   .empty-mark {
     grid-template-columns: repeat(2, 9px);
-    gap: 3px;
+    gap: 2px;
     margin-bottom: 10px;
   }
   .empty-mark i {
     width: 9px;
     height: 9px;
-    box-shadow: inset 0 0 0 2.4px #12161f, 0 2px 7px -2px currentColor;
+    box-shadow: inset 0 0 0 2.2px var(--bg-elev);
   }
   .empty-state h3 {
     font-size: 14px;

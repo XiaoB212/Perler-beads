@@ -417,7 +417,7 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
         </div>
 
         <div className="dialog-foot">
-          <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
             {img ? '导入后将替换当前画布内容，可用 Ctrl+Z 撤销' : '选择图片后可调整参数'}
           </span>
           <div className="spacer" />

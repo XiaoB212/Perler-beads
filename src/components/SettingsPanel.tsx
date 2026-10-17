@@ -1,6 +1,18 @@
 import { useEditor } from '../core/store';
 import type { ViewFlags } from '../core/types';
-import { IconBoard, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconRuler } from './Icons';
+import type { ThemeMode } from '../core/theme';
+import { IconBoard, IconCode, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconMoon, IconRuler, IconSun } from './Icons';
+
+interface Props {
+  themeMode?: ThemeMode;
+  onThemeChange?: (m: ThemeMode) => void;
+}
+
+const THEMES: { key: ThemeMode; label: string; icon: (p: { width: number; height: number }) => JSX.Element }[] = [
+  { key: 'auto', label: '跟随系统', icon: (p) => <IconHole {...p} /> },
+  { key: 'light', label: '亮色', icon: (p) => <IconSun {...p} /> },
+  { key: 'dark', label: '暗色', icon: (p) => <IconMoon {...p} /> },
+];
 
 const FLAG_ITEMS: { key: keyof ViewFlags; label: string; icon: (p: { width: number; height: number }) => JSX.Element }[] = [
   { key: 'grid', label: '网格线', icon: (p) => <IconGrid {...p} /> },
@@ -11,9 +23,10 @@ const FLAG_ITEMS: { key: keyof ViewFlags; label: string; icon: (p: { width: numb
   { key: 'symmetryY', label: '上下对称', icon: (p) => <IconMirrorY {...p} /> },
   { key: 'progressMode', label: '进度模式', icon: (p) => <IconHole {...p} /> },
   { key: 'dimUnplaced', label: '淡化未拼', icon: (p) => <IconHole {...p} /> },
+  { key: 'showCodes', label: '显示色号', icon: (p) => <IconCode {...p} /> },
 ];
 
-export default function SettingsPanel() {
+export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
   const doc = useEditor((s) => s.doc);
   const flags = useEditor((s) => s.flags);
   const toggleFlag = useEditor((s) => s.toggleFlag);
@@ -28,6 +41,22 @@ export default function SettingsPanel() {
     <div>
       <div className="panel-head">
         <span className="panel-title">画布设置</span>
+      </div>
+
+      <div className="field" style={{ marginBottom: 14 }}>
+        <label>界面主题</label>
+        <div className="segmented" style={{ alignSelf: 'stretch' }}>
+          {THEMES.map((t) => (
+            <button
+              key={t.key}
+              className={themeMode === t.key ? 'active' : ''}
+              onClick={() => onThemeChange?.(t.key)}
+              title={t.label}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="field" style={{ marginBottom: 14 }}>

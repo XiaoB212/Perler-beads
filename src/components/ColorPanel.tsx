@@ -1,13 +1,34 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useEditor } from '../core/store';
-import { BRAND_LABEL, palettePreset } from '../core/palette';
+import { BRAND_LABEL, PALETTE_KEYS, palettePreset, resolvePaletteKey } from '../core/palette';
 import { IconPalette, IconPlus, IconSearch, IconSettings, IconTrash } from './Icons';
 
 interface Props {
   onOpenManager: () => void;
 }
 
-const BRANDS = ['mard', 'artkal', 'perler', 'hama', 'basic'] as const;
+/** 色卡切换按钮上的短名，全名太长会挤爆一行 */
+const SHORT_LABEL: Record<string, string> = {
+  mard291: 'MARD',
+  coco291: 'COCO',
+  manman278: '漫漫',
+  mixiaowo290: '咪小窝',
+  panpan289: '盼盼',
+  artkal418: 'Artkal 418',
+  artkal197: 'Artkal C',
+  artkal221: 'Artkal M',
+  youken174: '优肯',
+  basic: '基础',
+};
+
+/** 从色号里取前缀当分组：A02 → A，CT03 → CT，01 → # */
+function groupOf(code: string): string {
+  const m = /^[A-Za-z]+/.exec(code);
+  return m ? m[0].toUpperCase() : '#';
+}
+
+/** 分页步长：一次多放出这么多色块，避免 291/418 色一次性铺满 DOM */
+const PAGE = 96;
 
 export default function ColorPanel({ onOpenManager }: Props) {
   const doc = useEditor((s) => s.doc);
@@ -17,9 +38,12 @@ export default function ColorPanel({ onOpenManager }: Props) {
   const notify = useEditor((s) => s.notify);
   const [q, setQ] = useState('');
   const [onlyUsed, setOnlyUsed] = useState(false);
+  const [group, setGroup] = useState<string>('all');
   const [libOpen, setLibOpen] = useState(false);
-  const [libBrand, setLibBrand] = useState<string>('mard');
+  const [libBrand, setLibBrand] = useState<string>('mard291');
   const [libQuery, setLibQuery] = useState('');
+  const [listLimit, setListLimit] = useState(PAGE);
+  const [libLimit, setLibLimit] = useState(PAGE);
 
   const usage = useMemo(() => {
     const m = new Map<number, number>();
@@ -31,12 +55,24 @@ export default function ColorPanel({ onOpenManager }: Props) {
     return m;
   }, [doc.cells]);
 
+  /** 色号分组：只有两个以上分组才显示 tab 条 */
+  const groups = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of doc.palette) {
+      const g = groupOf(c.code);
+      m.set(g, (m.get(g) ?? 0) + 1);
+    }
+    const keys = [...m.keys()].sort((a, b) => a.localeCompare(b));
+    return { keys, counts: m };
+  }, [doc.palette]);
+
   const list = useMemo(() => {
     const kw = q.trim().toLowerCase();
     return doc.palette
       .map((c, i) => ({ c, i }))
       .filter(({ c, i }) => {
         if (onlyUsed && !usage.get(i)) return false;
+        if (group !== 'all' && groupOf(c.code) !== group) return false;
         if (!kw) return true;
         return (
           c.name.toLowerCase().includes(kw) ||
@@ -45,7 +81,7 @@ export default function ColorPanel({ onOpenManager }: Props) {
           c.brand.toLowerCase().includes(kw)
         );
       });
-  }, [doc.palette, q, onlyUsed, usage]);
+  }, [doc.palette, q, onlyUsed, usage, group]);
 
   // 品牌色板里还没进当前图纸的颜色
   const library = useMemo(() => {
@@ -59,6 +95,17 @@ export default function ColorPanel({ onOpenManager }: Props) {
   }, [doc.palette, libBrand, libQuery]);
 
   const cur = doc.palette[colorIndex];
+
+  // 筛选条件一变就从第一页重新开始，避免停在「第 8 页」却只剩 3 条
+  useEffect(() => {
+    setListLimit(PAGE);
+  }, [q, group, onlyUsed]);
+  useEffect(() => {
+    setLibLimit(PAGE);
+  }, [libBrand, libQuery]);
+
+  const shown = list.slice(0, listLimit);
+  const libShown = library.slice(0, libLimit);
 
   const addFromLibrary = (hex: string, brand: string, code: string, name: string) => {
     const idx = addCustomColor({
@@ -115,8 +162,28 @@ export default function ColorPanel({ onOpenManager }: Props) {
         </button>
       </div>
 
+      {groups.keys.length > 1 && (
+        <div className="group-tabs" role="tablist">
+          <button
+            className={'group-tab' + (group === 'all' ? ' active' : '')}
+            onClick={() => setGroup('all')}
+          >
+            全部 <em>{doc.palette.length}</em>
+          </button>
+          {groups.keys.map((g) => (
+            <button
+              key={g}
+              className={'group-tab' + (group === g ? ' active' : '')}
+              onClick={() => setGroup(g === group ? 'all' : g)}
+            >
+              {g} <em>{groups.counts.get(g)}</em>
+            </button>
+          ))}
+        </div>
+      )}
+
       <div className="swatch-grid">
-        {list.map(({ c, i }) => (
+        {shown.map(({ c, i }) => (
           <button
             key={c.id + i}
             className={'swatch' + (i === colorIndex ? ' active' : '')}
@@ -138,6 +205,11 @@ export default function ColorPanel({ onOpenManager }: Props) {
           </div>
         )}
       </div>
+      {list.length > listLimit && (
+        <button className="load-more" onClick={() => setListLimit((n) => n + PAGE * 2)}>
+          还有 {list.length - listLimit} 个色号 · 继续显示
+        </button>
+      )}
 
       {/* 从品牌色板补充颜色：不用先去色号管理建自定义色 */}
       <div className={'color-lib' + (libOpen ? ' open' : '')}>
@@ -148,28 +220,28 @@ export default function ColorPanel({ onOpenManager }: Props) {
         </button>
         {libOpen && (
           <>
-            <div className="seg-row" style={{ marginBottom: 6 }}>
-              {BRANDS.map((k) => (
+            <div className="seg-row seg-wrap" style={{ marginBottom: 6 }}>
+              {PALETTE_KEYS.map((k) => (
                 <button
                   key={k}
                   className={'btn sm ' + (libBrand === k ? 'primary' : '')}
                   onClick={() => setLibBrand(k)}
                   title={BRAND_LABEL[k]}
                 >
-                  {k === 'basic' ? '基础' : k.toUpperCase()}
+                  {SHORT_LABEL[k] ?? BRAND_LABEL[k]}
                 </button>
               ))}
             </div>
             <div className="palette-search" style={{ marginBottom: 6 }}>
               <IconSearch />
               <input
-                placeholder={`在 ${BRAND_LABEL[libBrand]} 里找色号`}
+                placeholder={`在 ${BRAND_LABEL[resolvePaletteKey(libBrand)]} 里找色号`}
                 value={libQuery}
                 onChange={(e) => setLibQuery(e.target.value)}
               />
             </div>
             <div className="swatch-grid lib">
-              {library.map((c) => (
+              {libShown.map((c) => (
                 <button
                   key={c.id}
                   className="swatch"
@@ -187,6 +259,11 @@ export default function ColorPanel({ onOpenManager }: Props) {
                 </div>
               )}
             </div>
+            {library.length > libLimit && (
+              <button className="load-more" onClick={() => setLibLimit((n) => n + PAGE * 2)}>
+                还有 {library.length - libLimit} 个色号 · 继续显示
+              </button>
+            )}
           </>
         )}
       </div>

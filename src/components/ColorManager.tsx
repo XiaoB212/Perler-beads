@@ -187,7 +187,7 @@ export default function ColorManager({ onClose }: Props) {
               </div>
             </div>
             <div className="dialog-foot">
-              <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>
+              <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
                 提示：删除色号会同时清除画布上使用该色的格子
               </span>
               <div className="spacer" />
@@ -199,7 +199,7 @@ export default function ColorManager({ onClose }: Props) {
         ) : (
           <>
             <div className="dialog-body">
-              <p style={{ marginTop: 0, fontSize: 12, color: 'var(--text-mute)', lineHeight: 1.7 }}>
+              <p style={{ marginTop: 0, fontSize: 12, color: 'var(--ink-3)', lineHeight: 1.7 }}>
                 选择一套品牌色板替换当前图纸色板。已画的内容会自动映射到最接近的新色号，不会丢失。
               </p>
               <div style={{ display: 'grid', gap: 8 }}>

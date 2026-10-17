@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useEditor } from '../core/store';
-import { BRAND_LABEL } from '../core/palette';
+import { BRAND_LABEL, DEFAULT_PALETTE_KEY, PALETTE_KEYS } from '../core/palette';
 import { IconClose, IconPlus } from './Icons';
 
 interface Props {
@@ -16,14 +16,12 @@ const SIZES = [
   { w: 116, h: 116, label: '116 × 116', sub: '四板' },
 ];
 
-const PALETTE_KEYS = ['mard', 'artkal', 'perler', 'hama', 'basic'];
-
 export default function NewCanvasDialog({ onClose }: Props) {
   const newDocument = useEditor((s) => s.newDocument);
   const dirty = useEditor((s) => s.dirty);
   const [w, setW] = useState(48);
   const [h, setH] = useState(48);
-  const [paletteKey, setPaletteKey] = useState('mard');
+  const [paletteKey, setPaletteKey] = useState<string>(DEFAULT_PALETTE_KEY);
   const [name, setName] = useState('');
 
   const create = () => {
@@ -104,19 +102,20 @@ export default function NewCanvasDialog({ onClose }: Props) {
 
           <div className="field">
             <label>品牌色板</label>
-            <div className="seg-row">
+            <select
+              className="select"
+              value={paletteKey}
+              onChange={(e) => setPaletteKey(e.target.value)}
+            >
               {PALETTE_KEYS.map((k) => (
-                <button
-                  key={k}
-                  className={'btn sm ' + (paletteKey === k ? 'primary' : '')}
-                  onClick={() => setPaletteKey(k)}
-                >
+                <option key={k} value={k}>
                   {BRAND_LABEL[k]}
-                </button>
+                </option>
               ))}
-            </div>
+            </select>
             <span className="hint">
-              共 {w * h} 格 · {Math.ceil(w / 29) * Math.ceil(h / 29)} 块 29×29 拼豆板
+              共 {w * h} 格 · {Math.ceil(w / 29) * Math.ceil(h / 29)} 块 29×29 拼豆板 ·
+              色卡数据来自 pindou-color-data
             </span>
           </div>
         </div>

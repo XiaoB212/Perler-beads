@@ -152,7 +152,7 @@ export default function ProjectsDialog({ onClose }: Props) {
         </div>
 
         <div className="dialog-foot">
-          <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>共 {list.length} 份图纸</span>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>共 {list.length} 份图纸</span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>
             关闭

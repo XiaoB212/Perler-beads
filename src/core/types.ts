@@ -67,6 +67,8 @@ export interface ViewFlags {
   symmetryY: boolean;
   progressMode: boolean;
   dimUnplaced: boolean;
+  /** 在每颗豆子上显示色号（需要放大到一定倍数才画得下） */
+  showCodes: boolean;
 }
 
 export const DEFAULT_FLAGS: ViewFlags = {
@@ -78,6 +80,7 @@ export const DEFAULT_FLAGS: ViewFlags = {
   symmetryY: false,
   progressMode: false,
   dimUnplaced: true,
+  showCodes: false,
 };
 
 /** 撤销快照 */

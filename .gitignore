@@ -1,10 +1,10 @@
-# ä¾èµ–ä¸æ„å»ºäº§ç‰©
+# deps & build
 node_modules/
 dist/
 dist-ssr/
 *.local
 
-# ç¼–è¾‘å™¨ / ç³»ç»Ÿ
+# editor / OS
 .vscode/*
 !.vscode/extensions.json
 .idea/
@@ -16,7 +16,7 @@ Thumbs.db
 *.sln
 *.sw?
 
-# æ—¥å¿—
+# logs
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -24,22 +24,19 @@ pnpm-debug.log*
 logs/
 *.log
 
-# æœ¬åœ°ç¼“å­˜ä¸ä¸´æ—¶ç›®å½•ï¼ˆæ²™ç®±/æ„å»ºï¼‰
+# local caches & temp dirs
 .npm-cache/
 *.tsbuildinfo
 .tmpdir/
 *_tmp_*
 src/**/*.tmpdir/
 
-# æµ‹è¯•ä¸æˆªå›¾äº§ç‰©
+# local automation: test scripts, screenshots, research notes
+scripts/
 .shots/
+.research/
 
-# ç¯å¢ƒå˜é‡
+# env
 .env
 .env.local
 .env.*.local
-
-# ±¾µØ×Ô¶¯»¯²âÊÔ½Å±¾£¨º¬±¾»ú Chrome Â·¾¶£¬²»Ëæ²Ö¿â·¢²¼£©
-scripts/
-.shots/
-

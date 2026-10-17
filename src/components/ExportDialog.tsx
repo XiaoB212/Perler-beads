@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../core/store';
 import {
+  BOARD_PRESETS,
   DEFAULT_PDF,
   DEFAULT_RENDER,
   exportCSV,
@@ -9,6 +10,7 @@ import {
   exportProject,
   exportSVG,
   renderPatternCanvas,
+  renderPdfPreviewCanvas,
   type PdfOptions,
   type RenderOptions,
 } from '../core/export';
@@ -23,7 +25,7 @@ type Fmt = 'png' | 'svg' | 'pdf' | 'csv' | 'project';
 const FORMATS: { key: Fmt; label: string; desc: string; icon: 'img' | 'file' }[] = [
   { key: 'png', label: 'PNG 图片', desc: '高清位图，适合分享', icon: 'img' },
   { key: 'svg', label: 'SVG 矢量', desc: '无限放大，可再编辑', icon: 'file' },
-  { key: 'pdf', label: 'PDF 图纸', desc: '分页打印，带坐标用量', icon: 'file' },
+  { key: 'pdf', label: 'PDF 图纸', desc: '整张一页，直接打印', icon: 'file' },
   { key: 'csv', label: 'CSV 用量表', desc: '色号清单，采购用', icon: 'file' },
   { key: 'project', label: '工程文件', desc: '.perler.json 可再次导入', icon: 'file' },
 ];
@@ -41,9 +43,12 @@ export default function ExportDialog({ onClose }: Props) {
   const [transparent, setTransparent] = useState(false);
 
   const [pageSize, setPageSize] = useState<'a4' | 'letter'>('a4');
-  const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('landscape');
+  const [orientation, setOrientation] = useState<'auto' | 'portrait' | 'landscape'>('auto');
+  const [layout, setLayout] = useState<'single' | 'boards' | 'tile'>('single');
   const [maxCellsPerPage, setMaxCellsPerPage] = useState(32);
-  const [withLegend, setWithLegend] = useState(true);
+  const [withLegend, setWithLegend] = useState(false);
+  const [calibration, setCalibration] = useState(true);
+  const [boardSize, setBoardSize] = useState(0);
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -58,31 +63,77 @@ export default function ExportDialog({ onClose }: Props) {
       dimUnplaced: false,
       background: transparent ? null : background ? '#ffffff' : null,
       title: doc.name,
+      boardSize,
+      boardGap: 1.2,
     }),
-    [cellSize, grid, coords, holes, showCodes, transparent, background, doc.name],
+    [cellSize, grid, coords, holes, showCodes, transparent, background, doc.name, boardSize],
   );
 
   const pdfOpts: PdfOptions = useMemo(
-    () => ({ ...DEFAULT_PDF, ...renderOpts, pageSize, orientation, maxCellsPerPage, withLegend, withHeader: true }),
-    [renderOpts, pageSize, orientation, maxCellsPerPage, withLegend],
+    () => ({
+      ...DEFAULT_PDF,
+      ...renderOpts,
+      pageSize,
+      orientation,
+      layout,
+      maxCellsPerPage,
+      withLegend,
+      calibration,
+      withHeader: true,
+      boardSize,
+    }),
+    [renderOpts, pageSize, orientation, layout, maxCellsPerPage, withLegend, calibration, boardSize],
   );
+
+  const boardCols = boardSize > 0 ? Math.ceil(doc.width / boardSize) : 1;
+  const boardRows = boardSize > 0 ? Math.ceil(doc.height / boardSize) : 1;
+  const boardTotal = boardCols * boardRows;
+
+  // PDF 预览的页数：一板一页 = 板数；分块 = 块数；单页 = 1
+  const pdfPages =
+    layout === 'boards'
+      ? boardTotal
+      : layout === 'tile'
+        ? Math.ceil(doc.width / maxCellsPerPage) * Math.ceil(doc.height / maxCellsPerPage)
+        : 1;
+  const [pdfPage, setPdfPage] = useState(0);
+  useEffect(() => {
+    if (pdfPage > pdfPages - 1) setPdfPage(0);
+  }, [pdfPages, pdfPage]);
 
   // 实时预览
   useEffect(() => {
     const host = previewRef.current;
     if (!host) return;
     host.innerHTML = '';
-    if (fmt === 'pdf' || fmt === 'csv' || fmt === 'project') return;
-    const canvas = renderPatternCanvas(doc, {
-      ...renderOpts,
-      cellSize: Math.max(3, Math.min(renderOpts.cellSize, Math.floor(520 / Math.max(doc.width, doc.height)))),
-    });
+    if (fmt === 'csv' || fmt === 'project') return;
+
+    let canvas: HTMLCanvasElement;
+    if (fmt === 'pdf') {
+      canvas = renderPdfPreviewCanvas(doc, { ...pdfOpts, page: pdfPage });
+    } else {
+      const gap = 1.2;
+      const spanW = boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * gap : doc.width;
+      const spanH = boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * gap : doc.height;
+      canvas = renderPatternCanvas(doc, {
+        ...renderOpts,
+        cellSize: Math.max(3, Math.min(renderOpts.cellSize, Math.floor(520 / Math.max(spanW, spanH)))),
+      });
+      canvas.style.imageRendering = 'pixelated';
+    }
     canvas.style.maxWidth = '100%';
+    canvas.style.maxHeight = '100%';
+    canvas.style.width = 'auto';
     canvas.style.height = 'auto';
-    canvas.style.borderRadius = '6px';
-    canvas.style.imageRendering = 'pixelated';
+    canvas.style.display = 'block';
+    canvas.style.borderRadius = '4px';
+    if (fmt === 'pdf') {
+      canvas.style.imageRendering = 'auto';
+      canvas.style.boxShadow = '0 6px 24px -6px rgba(0,0,0,.35)';
+      canvas.style.background = '#fff';
+    }
     host.appendChild(canvas);
-  }, [doc, renderOpts, fmt]);
+  }, [doc, renderOpts, pdfOpts, fmt, boardSize, pdfPage]);
 
   const doExport = () => {
     try {
@@ -133,19 +184,10 @@ export default function ExportDialog({ onClose }: Props) {
           </div>
 
           <div className="import-grid" style={{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)' }}>
-            <div className="preview-box" style={{ minHeight: 240 }}>
-              <span className="preview-label">预览</span>
-              {fmt === 'pdf' || fmt === 'csv' || fmt === 'project' ? (
-                <div style={{ textAlign: 'center', color: 'var(--text-mute)', fontSize: 12, lineHeight: 1.8 }}>
-                  {fmt === 'pdf' && (
-                    <>
-                      <IconFile width={26} height={26} style={{ marginBottom: 8, opacity: 0.6 }} />
-                      <div>
-                        将导出 {Math.ceil(doc.width / maxCellsPerPage) * Math.ceil(doc.height / maxCellsPerPage)} 页图纸
-                      </div>
-                      <div>分块打印，带坐标与 5 格加粗线</div>
-                    </>
-                  )}
+            <div className="preview-box" style={{ minHeight: 260, padding: 12 }}>
+              <span className="preview-label">{fmt === 'pdf' ? '纸张预览' : '预览'}</span>
+              {fmt === 'csv' || fmt === 'project' ? (
+                <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.8 }}>
                   {fmt === 'csv' && (
                     <>
                       <IconFile width={26} height={26} style={{ marginBottom: 8, opacity: 0.6 }} />
@@ -162,7 +204,61 @@ export default function ExportDialog({ onClose }: Props) {
                   )}
                 </div>
               ) : (
-                <div ref={previewRef} style={{ display: 'flex', justifyContent: 'center', width: '100%' }} />
+                <>
+                  <div
+                    ref={previewRef}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      width: '100%',
+                      height: 420,
+                    }}
+                  />
+                  {fmt === 'pdf' && pdfPages > 1 && (
+                    <div className="pdf-pager">
+                      <button
+                        className="btn ghost sm"
+                        disabled={pdfPage === 0}
+                        onClick={() => setPdfPage((p) => Math.max(0, p - 1))}
+                      >
+                        上一页
+                      </button>
+                      <span>
+                        第 {pdfPage + 1} / {pdfPages} 页
+                      </span>
+                      <button
+                        className="btn ghost sm"
+                        disabled={pdfPage >= pdfPages - 1}
+                        onClick={() => setPdfPage((p) => Math.min(pdfPages - 1, p + 1))}
+                      >
+                        下一页
+                      </button>
+                    </div>
+                  )}
+                  {fmt === 'pdf' && (
+                    <div className="pdf-cap">
+                      {layout === 'single' && (
+                        <>
+                          整张图纸 1 页装下 · 自动缩放至 {pageSize === 'a4' ? 'A4' : 'Letter'}{' '}
+                          {boardSize > 0 ? `· 含 ${boardCols}×${boardRows} 块板框与板号` : ''}
+                        </>
+                      )}
+                      {layout === 'boards' && (
+                        <>
+                          每块板 1 页，共 {boardTotal} 页 ·{' '}
+                          {boardSize > 0 ? `${boardSize} × ${boardSize}` : `${doc.pegboard} × ${doc.pegboard}`}{' '}
+                          格一块板 · 可 1:1 打印后逐块拼装
+                        </>
+                      )}
+                      {layout === 'tile' && (
+                        <>
+                          {pdfPages} 页 · 每页 {maxCellsPerPage} × {maxCellsPerPage} 格分块
+                        </>
+                      )}
+                    </div>
+                  )}
+                </>
               )}
             </div>
 
@@ -182,7 +278,23 @@ export default function ExportDialog({ onClose }: Props) {
                       <span className="val">{cellSize}px</span>
                     </div>
                     <span className="hint">
-                      输出约 {doc.width * cellSize} × {doc.height * cellSize} px
+                      输出约 {(boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * 1.2 : doc.width) * cellSize | 0} ×{' '}
+                      {(boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * 1.2 : doc.height) * cellSize | 0} px
+                    </span>
+                  </div>
+                  <div className="field">
+                    <label>拼豆板尺寸</label>
+                    <select className="select" value={boardSize} onChange={(e) => setBoardSize(Number(e.target.value))}>
+                      {BOARD_PRESETS.map((b) => (
+                        <option key={b.value} value={b.value}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="hint">
+                      {boardSize > 0
+                        ? `${doc.width} × ${doc.height} 需要 ${boardCols} × ${boardRows} = ${boardTotal} 块板，导出图上会标出板框与板号`
+                        : '选一个板尺寸，导出图会按实体板切分并标出板号'}
                     </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>
@@ -229,6 +341,40 @@ export default function ExportDialog({ onClose }: Props) {
               {fmt === 'pdf' && (
                 <>
                   <div className="field">
+                    <label>排版</label>
+                    <div className="segmented">
+                      <button className={layout === 'single' ? 'active' : ''} onClick={() => setLayout('single')}>
+                        整张一页
+                      </button>
+                      <button className={layout === 'boards' ? 'active' : ''} onClick={() => setLayout('boards')}>
+                        一板一页
+                      </button>
+                      <button className={layout === 'tile' ? 'active' : ''} onClick={() => setLayout('tile')}>
+                        分块
+                      </button>
+                    </div>
+                    <span className="hint">
+                      {layout === 'single' && '整张图纸缩放进一张纸，一眼看全；大图会画出板框与板号'}
+                      {layout === 'boards' && '按实体拼豆板切分，每块板一页，可 1:1 打印后逐块拼装'}
+                      {layout === 'tile' && '按每页格数硬切，适合需要放大对照的场景'}
+                    </span>
+                  </div>
+                  <div className="field">
+                    <label>拼豆板尺寸</label>
+                    <select className="select" value={boardSize} onChange={(e) => setBoardSize(Number(e.target.value))}>
+                      {BOARD_PRESETS.map((b) => (
+                        <option key={b.value} value={b.value}>
+                          {b.label}
+                        </option>
+                      ))}
+                    </select>
+                    <span className="hint">
+                      {boardSize > 0
+                        ? `${doc.width} × ${doc.height} 需要 ${boardCols} × ${boardRows} = ${boardTotal} 块板`
+                        : '选一个板尺寸，图纸会按板切分并标出板号'}
+                    </span>
+                  </div>
+                  <div className="field">
                     <label>纸张</label>
                     <div className="segmented">
                       <button className={pageSize === 'a4' ? 'active' : ''} onClick={() => setPageSize('a4')}>
@@ -242,6 +388,9 @@ export default function ExportDialog({ onClose }: Props) {
                   <div className="field">
                     <label>方向</label>
                     <div className="segmented">
+                      <button className={orientation === 'auto' ? 'active' : ''} onClick={() => setOrientation('auto')}>
+                        自动
+                      </button>
                       <button
                         className={orientation === 'landscape' ? 'active' : ''}
                         onClick={() => setOrientation('landscape')}
@@ -256,19 +405,27 @@ export default function ExportDialog({ onClose }: Props) {
                       </button>
                     </div>
                   </div>
-                  <div className="field">
-                    <label>每页格数</label>
-                    <div className="slider-row">
-                      <input
-                        type="range"
-                        min={10}
-                        max={60}
-                        step={2}
-                        value={maxCellsPerPage}
-                        onChange={(e) => setMaxCellsPerPage(Number(e.target.value))}
-                      />
-                      <span className="val">{maxCellsPerPage}</span>
+                  {layout === 'tile' && (
+                    <div className="field">
+                      <label>每页格数</label>
+                      <div className="slider-row">
+                        <input
+                          type="range"
+                          min={10}
+                          max={60}
+                          step={2}
+                          value={maxCellsPerPage}
+                          onChange={(e) => setMaxCellsPerPage(Number(e.target.value))}
+                        />
+                        <span className="val">{maxCellsPerPage}</span>
+                      </div>
                     </div>
+                  )}
+                  <div className="check-row" onClick={() => setCalibration((v) => !v)}>
+                    <span className={'checkbox' + (calibration ? ' on' : '')}>
+                      <IconCheck width={11} height={11} />
+                    </span>
+                    页脚 50mm 校准标尺
                   </div>
                   <div className="check-row" onClick={() => setWithLegend((v) => !v)}>
                     <span className={'checkbox' + (withLegend ? ' on' : '')}>
@@ -291,7 +448,7 @@ export default function ExportDialog({ onClose }: Props) {
         </div>
 
         <div className="dialog-foot">
-          <span style={{ fontSize: 11, color: 'var(--text-mute)' }}>
+          <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
             {doc.width} × {doc.height} · {doc.palette.length} 色板
           </span>
           <div className="spacer" />
