@@ -155,43 +155,81 @@ export default function CanvasStage({ doc }: Props) {
     ctx.beginPath();
     roundRect(ctx, originX, originY, boardW, boardH, 6);
     ctx.clip();
-    for (let y = 0; y < doc.height; y++) {
-      for (let x = 0; x < doc.width; x++) {
+    // 只画视口内的格子：300×300 的大画布有 9 万格，全量遍历每帧要几十毫秒
+    const vx0 = Math.max(0, Math.floor((0 - originX) / cell) - 1);
+    const vx1 = Math.min(doc.width - 1, Math.ceil((size.w - originX) / cell) + 1);
+    const vy0 = Math.max(0, Math.floor((0 - originY) / cell) - 1);
+    const vy1 = Math.min(doc.height - 1, Math.ceil((size.h - originY) / cell) + 1);
+
+    // 按颜色归批：同色格子合成一条 path，一次 fill，避免每格都切 fillStyle。
+    // 豆子孔与对勾也各自合成一条 path，只画一次。
+    const dimMode = flags.progressMode && flags.dimUnplaced;
+    const byColor = new Map<string, Path2D>();
+    const byColorDim = new Map<string, Path2D>();
+    const holes = new Path2D();
+    const checks = new Path2D();
+    const holeR = Math.max(0.9, cell * 0.14);
+    const drawHoles = flags.beadHoles && cell >= 8;
+    const emptyEven = new Path2D();
+    const emptyOdd = new Path2D();
+    for (let y = vy0; y <= vy1; y++) {
+      for (let x = vx0; x <= vx1; x++) {
         const px = originX + x * cell;
         const py = originY + y * cell;
         const v = doc.cells[y * doc.width + x];
         if (!v) {
-          ctx.fillStyle = (x + y) % 2 === 0 ? '#20263a' : '#1c2134';
-          ctx.fillRect(px, py, step, step);
+          ((x + y) % 2 === 0 ? emptyEven : emptyOdd).rect(px, py, step, step);
           continue;
         }
         const c = doc.palette[v - 1];
         if (!c) continue;
         const placed = doc.progress[y * doc.width + x] === 1;
-        ctx.globalAlpha = flags.progressMode && flags.dimUnplaced && !placed ? 0.32 : 1;
-        ctx.fillStyle = c.hex;
-        ctx.fillRect(px, py, step, step);
-        ctx.globalAlpha = 1;
-        if (flags.beadHoles && cell >= 8) {
-          ctx.beginPath();
-          ctx.arc(px + cell / 2, py + cell / 2, Math.max(0.9, cell * 0.14), 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255,255,255,0.72)';
-          ctx.fill();
-          ctx.strokeStyle = 'rgba(0,0,0,0.16)';
-          ctx.lineWidth = Math.max(0.4, cell * 0.035);
-          ctx.stroke();
+        const dim = dimMode && !placed;
+        const bucket = dim ? byColorDim : byColor;
+        let p = bucket.get(c.hex);
+        if (!p) {
+          p = new Path2D();
+          bucket.set(c.hex, p);
         }
-        // 对勾只在进度模式下显示，平时保持图纸干净
+        p.rect(px, py, step, step);
+        if (drawHoles) {
+          const hx = px + cell / 2;
+          const hy = py + cell / 2;
+          holes.moveTo(hx + holeR, hy);
+          holes.arc(hx, hy, holeR, 0, Math.PI * 2);
+        }
         if (placed && flags.progressMode) {
-          ctx.strokeStyle = 'rgba(255,255,255,0.9)';
-          ctx.lineWidth = Math.max(1.2, cell * 0.09);
-          ctx.beginPath();
-          ctx.moveTo(px + cell * 0.22, py + cell * 0.52);
-          ctx.lineTo(px + cell * 0.42, py + cell * 0.74);
-          ctx.lineTo(px + cell * 0.8, py + cell * 0.26);
-          ctx.stroke();
+          checks.moveTo(px + cell * 0.22, py + cell * 0.52);
+          checks.lineTo(px + cell * 0.42, py + cell * 0.74);
+          checks.lineTo(px + cell * 0.8, py + cell * 0.26);
         }
       }
+    }
+    ctx.fillStyle = '#20263a';
+    ctx.fill(emptyEven);
+    ctx.fillStyle = '#1c2134';
+    ctx.fill(emptyOdd);
+    for (const [hex, p] of byColor) {
+      ctx.fillStyle = hex;
+      ctx.fill(p);
+    }
+    ctx.globalAlpha = 0.32;
+    for (const [hex, p] of byColorDim) {
+      ctx.fillStyle = hex;
+      ctx.fill(p);
+    }
+    ctx.globalAlpha = 1;
+    if (drawHoles) {
+      ctx.fillStyle = 'rgba(255,255,255,0.72)';
+      ctx.fill(holes);
+      ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+      ctx.lineWidth = Math.max(0.4, cell * 0.035);
+      ctx.stroke(holes);
+    }
+    if (flags.progressMode) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+      ctx.lineWidth = Math.max(1.2, cell * 0.09);
+      ctx.stroke(checks);
     }
     ctx.restore();
 
