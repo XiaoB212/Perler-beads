@@ -10,6 +10,7 @@ import ImportDialog from './components/ImportDialog';
 import ExportDialog from './components/ExportDialog';
 import NewCanvasDialog from './components/NewCanvasDialog';
 import ProjectsDialog from './components/ProjectsDialog';
+import ShortcutsDialog from './components/ShortcutsDialog';
 import {
   IconBoard,
   IconBucket,
@@ -22,6 +23,7 @@ import {
   IconGrid,
   IconHand,
   IconImage,
+  IconKeyboard,
   IconLayers,
   IconLine,
   IconMenu,
@@ -38,38 +40,34 @@ import {
   IconUpload,
 } from './components/Icons';
 import type { Tool } from './core/types';
+import { eventToBinding, keyLabel, loadKeymap, resolveAction, type KeyMap } from './core/keymap';
 import { docToThumb, parseProject, totalBeads } from './core/export';
 import { readIndex, saveDoc } from './core/storage';
+import { boardCount } from './core/board';
 
-type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors';
+type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys';
 type SideTab = 'colors' | 'usage' | 'settings';
 
 const TOOLS: {
   key: Tool;
   label: string;
-  hint?: string;
   icon: (p: { width: number; height: number }) => JSX.Element;
 }[] = [
-  { key: 'pencil', label: '画笔', hint: '(B)', icon: (p) => <IconPencil {...p} /> },
-  { key: 'eraser', label: '橡皮', hint: '(E)', icon: (p) => <IconEraser {...p} /> },
-  { key: 'bucket', label: '填充', hint: '(G)', icon: (p) => <IconBucket {...p} /> },
-  { key: 'line', label: '直线', hint: '(L)', icon: (p) => <IconLine {...p} /> },
-  { key: 'rect', label: '矩形', hint: '(R)', icon: (p) => <IconRect {...p} /> },
-  { key: 'ellipse', label: '椭圆', hint: '(O)', icon: (p) => <IconEllipse {...p} /> },
-  { key: 'picker', label: '吸管', hint: '(I)', icon: (p) => <IconPicker {...p} /> },
-  { key: 'pan', label: '平移', hint: '(H)', icon: (p) => <IconHand {...p} /> },
+  { key: 'pencil', label: '画笔', icon: (p) => <IconPencil {...p} /> },
+  { key: 'eraser', label: '橡皮', icon: (p) => <IconEraser {...p} /> },
+  { key: 'bucket', label: '填充', icon: (p) => <IconBucket {...p} /> },
+  { key: 'line', label: '直线', icon: (p) => <IconLine {...p} /> },
+  { key: 'rect', label: '矩形', icon: (p) => <IconRect {...p} /> },
+  { key: 'ellipse', label: '椭圆', icon: (p) => <IconEllipse {...p} /> },
+  { key: 'picker', label: '吸管', icon: (p) => <IconPicker {...p} /> },
+  { key: 'pan', label: '平移', icon: (p) => <IconHand {...p} /> },
 ];
 
-const TOOL_KEYS: Record<string, Tool> = {
-  b: 'pencil',
-  e: 'eraser',
-  g: 'bucket',
-  l: 'line',
-  r: 'rect',
-  o: 'ellipse',
-  i: 'picker',
-  h: 'pan',
-};
+/** 工具按钮的提示：键位从可自定义键位表里取，改了键位提示也跟着变 */
+function toolHint(keymap: KeyMap, tool: Tool): string {
+  const bound = keymap[`tool.${tool}`];
+  return bound ? ` (${keyLabel(bound).join('+')})` : '';
+}
 
 export default function App() {
   const doc = useEditor((s) => s.doc);
@@ -88,6 +86,11 @@ export default function App() {
   const notify = useEditor((s) => s.notify);
   const brushSize = useEditor((s) => s.brushSize);
   const setBrushSize = useEditor((s) => s.setBrushSize);
+  const colorIndexSel = useEditor((s) => s.colorIndex);
+  const setColorIndex = useEditor((s) => s.setColorIndex);
+  const setZoom = useEditor((s) => s.setZoom);
+  const requestFit = useEditor((s) => s.requestFit);
+  const [keymap, setKeymap] = useState<KeyMap>(() => loadKeymap());
 
   const [dialog, setDialog] = useState<Dialog>(null);
   const [tab, setTab] = useState<SideTab>('colors');
@@ -119,6 +122,11 @@ export default function App() {
   const themeTitle = themeMode === 'auto' ? '跟随系统' : themeMode === 'light' ? '亮色' : '暗色';
 
   const beadCount = useMemo(() => totalBeads(doc), [doc]);
+  // 按当前单板格数切出来的实体板数量（0 = 不分板）
+  const boardTotal = useMemo(
+    () => (doc.pegboard > 0 ? boardCount(doc.width, doc.height, doc.pegboard) : 0),
+    [doc.width, doc.height, doc.pegboard],
+  );
 
   // 首次访问：读取本地最近文档
   useEffect(() => {
@@ -196,64 +204,176 @@ export default function App() {
     };
   }, [loadDocument, notify]);
 
-  // 快捷键
+  // ===== 快捷键：全部走可自定义键位表 =====
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return;
-      const mod = e.ctrlKey || e.metaKey;
-      if (e.key === 'Escape') {
-        setDialog(null);
-        setSheet(null);
-        setDropped(null);
+      const el = e.target as HTMLElement | null;
+      if (el && el.closest('input,textarea,select,[contenteditable="true"]')) return;
+      const binding = eventToBinding(e);
+      if (!binding) return;
+      const action = resolveAction(binding, keymap);
+      if (!action) {
+        // 数字键选色是动态的（色号数量不固定），不占键位表
+        if (!e.ctrlKey && !e.metaKey && !e.altKey && /^[1-9]$/.test(e.key)) {
+          const idx = Number(e.key) - 1;
+          if (idx < doc.palette.length) {
+            e.preventDefault();
+            setColorIndex(idx);
+            notify(`${doc.palette[idx].code} ${doc.palette[idx].name}`);
+          }
+        }
         return;
       }
-      if (mod && e.key.toLowerCase() === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-        return;
+      const s = useEditor.getState();
+      switch (action) {
+        case 'escape':
+          setDialog(null);
+          setSheet(null);
+          setDropped(null);
+          return;
+        case 'help':
+          e.preventDefault();
+          setDialog((d) => (d === 'keys' ? null : 'keys'));
+          return;
+        case 'edit.undo':
+          e.preventDefault();
+          undo();
+          return;
+        case 'edit.redo':
+          e.preventDefault();
+          redo();
+          return;
+        case 'file.save': {
+          e.preventDefault();
+          const d = s.doc;
+          const ok = saveDoc(d, docToThumb(d, 200));
+          if (ok) {
+            s.markClean();
+            notify('已保存到本地');
+          } else notify('本地空间不足', 'warn');
+          return;
+        }
+        case 'file.export':
+          e.preventDefault();
+          setDialog('export');
+          return;
+        case 'file.import':
+          e.preventDefault();
+          setDialog('import');
+          return;
+        case 'file.new':
+          e.preventDefault();
+          setDialog('new');
+          return;
+        case 'tool.pencil':
+        case 'tool.eraser':
+        case 'tool.bucket':
+        case 'tool.line':
+        case 'tool.rect':
+        case 'tool.ellipse':
+        case 'tool.picker':
+        case 'tool.pan':
+          e.preventDefault();
+          setTool(action.slice(5) as Tool);
+          return;
+        case 'cursor.up':
+          e.preventDefault();
+          s.moveCursor(0, -1, e.shiftKey ? 5 : 1);
+          return;
+        case 'cursor.down':
+          e.preventDefault();
+          s.moveCursor(0, 1, e.shiftKey ? 5 : 1);
+          return;
+        case 'cursor.left':
+          e.preventDefault();
+          s.moveCursor(-1, 0, e.shiftKey ? 5 : 1);
+          return;
+        case 'cursor.right':
+          e.preventDefault();
+          s.moveCursor(1, 0, e.shiftKey ? 5 : 1);
+          return;
+        case 'cursor.paint':
+          e.preventDefault();
+          s.paintAtCursor(false);
+          return;
+        case 'cursor.erase':
+          e.preventDefault();
+          s.paintAtCursor(true);
+          return;
+        case 'color.prev':
+        case 'color.next': {
+          e.preventDefault();
+          const n = s.doc.palette.length;
+          if (!n) return;
+          s.setColorIndex((s.colorIndex + (action === 'color.prev' ? -1 : 1) + n) % n);
+          return;
+        }
+        case 'brush.thinner':
+          e.preventDefault();
+          s.setBrushSize(s.brushSize - 1);
+          return;
+        case 'brush.thicker':
+          e.preventDefault();
+          s.setBrushSize(s.brushSize + 1);
+          return;
+        case 'view.zoomIn':
+          e.preventDefault();
+          s.setZoom(s.zoom * 1.25);
+          return;
+        case 'view.zoomOut':
+          e.preventDefault();
+          s.setZoom(s.zoom / 1.25);
+          return;
+        case 'view.fit':
+          e.preventDefault();
+          requestFit();
+          return;
+        case 'view.progress':
+          toggleFlag('progressMode');
+          return;
+        case 'view.grid':
+          toggleFlag('grid');
+          return;
+        case 'view.symmetryX':
+          toggleFlag('symmetryX');
+          return;
+        case 'view.symmetryY':
+          toggleFlag('symmetryY');
+          return;
+        case 'view.codes':
+          toggleFlag('showCodes');
+          return;
+        case 'view.pegboard':
+          toggleFlag('pegboard');
+          return;
+        case 'view.boardIds':
+          toggleFlag('boardIds');
+          return;
+        case 'board.focus': {
+          e.preventDefault();
+          const at = s.hover ?? { x: Math.floor(s.doc.width / 2), y: Math.floor(s.doc.height / 2) };
+          if (s.doc.pegboard <= 0) {
+            notify('先把拼豆板格数设成 14 / 29 / 48 才能聚焦单块板', 'warn');
+            return;
+          }
+          s.focusOnCell(at.x, at.y);
+          return;
+        }
+        case 'board.next':
+        case 'board.prev': {
+          e.preventDefault();
+          if (s.doc.pegboard <= 0) {
+            notify('先把拼豆板格数设成 14 / 29 / 48 才能切换板', 'warn');
+            return;
+          }
+          s.stepFocus(action === 'board.next' ? 1 : -1);
+          return;
+        }
       }
-      if (mod && e.key.toLowerCase() === 'y') {
-        e.preventDefault();
-        redo();
-        return;
-      }
-      if (mod && e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        const d = useEditor.getState().doc;
-        const ok = saveDoc(d, docToThumb(d, 200));
-        if (ok) {
-          useEditor.getState().markClean();
-          notify('已保存到本地');
-        } else notify('本地空间不足', 'warn');
-        return;
-      }
-      if (mod && e.key.toLowerCase() === 'e') {
-        e.preventDefault();
-        setDialog('export');
-        return;
-      }
-      if (mod && e.key.toLowerCase() === 'o') {
-        e.preventDefault();
-        setDialog('import');
-        return;
-      }
-      if (mod) return;
-      const k = e.key.toLowerCase();
-      if (TOOL_KEYS[k]) {
-        e.preventDefault();
-        setTool(TOOL_KEYS[k]);
-        return;
-      }
-      if (k === '[') setBrushSize(brushSize - 1);
-      if (k === ']') setBrushSize(brushSize + 1);
-      if (k === 'p') toggleFlag('progressMode');
-      if (k === 'n') setDialog('new');
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, setTool, notify, brushSize, setBrushSize, toggleFlag]);
+  }, [undo, redo, setTool, notify, toggleFlag, doc.palette, setColorIndex, requestFit, keymap]);
 
   const colorIndex = useEditor((s) => s.colorIndex);
   const cur = doc.palette[colorIndex];
@@ -319,6 +439,14 @@ export default function App() {
               {resolved === 'dark' ? <IconMoon width={15} height={15} /> : <IconSun width={15} height={15} />}
             </button>
             <div className="vdivider hide-md" />
+            <button
+              className="btn ghost icon hide-md"
+              onClick={() => setDialog('keys')}
+              title="快捷键 (?)"
+              aria-label="快捷键"
+            >
+              <IconKeyboard width={16} height={16} />
+            </button>
             <button className="btn sm hide-sm" onClick={() => setDialog('new')} title="新建图纸 (N)">
               <IconPlus width={13} height={13} /> 新建
             </button>
@@ -342,7 +470,7 @@ export default function App() {
                 key={t.key}
                 className={'rail-btn' + (tool === t.key ? ' active' : '')}
                 onClick={() => setTool(t.key)}
-                title={`${t.label}${t.hint ? ' ' + t.hint : ''}`}
+                title={`${t.label}${toolHint(keymap, t.key)}`}
               >
                 <t.icon width={17} height={17} />
                 <span className="rail-label">{t.label}</span>
@@ -450,10 +578,33 @@ export default function App() {
               >
                 色号
               </button>
+              {doc.pegboard > 0 && (
+                <>
+                  <button
+                    className={'tbar-chip' + (flags.pegboard ? ' on' : '')}
+                    onClick={() => toggleFlag('pegboard')}
+                    title={`单板 ${doc.pegboard}×${doc.pegboard}，共 ${boardTotal} 块`}
+                  >
+                    分板
+                  </button>
+                  <button
+                    className={'tbar-chip' + (flags.boardIds ? ' on' : '')}
+                    onClick={() => toggleFlag('boardIds')}
+                    title="在每块板的左上角标出 A1 / B2 这样的板号"
+                  >
+                    板号
+                  </button>
+                </>
+              )}
               <div className="vdivider" style={{ margin: '0 2px' }} />
               <span className="tbar-chip" style={{ cursor: 'default' }}>
                 <IconFile width={12} height={12} /> {beadCount} 颗
               </span>
+              {doc.pegboard > 0 && (
+                <span className="tbar-chip" style={{ cursor: 'default' }} title="按当前单板格数切出来的实体板数量">
+                  {boardTotal} 块板
+                </span>
+              )}
             </div>
           </div>
 
@@ -587,6 +738,13 @@ export default function App() {
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
       {dialog === 'colors' && <ColorManager onClose={() => setDialog(null)} />}
+      {dialog === 'keys' && (
+        <ShortcutsDialog
+          onClose={() => setDialog(null)}
+          keymap={keymap}
+          onChange={setKeymap}
+        />
+      )}
 
       {/* ============ Toast ============ */}
       <div className="toast-wrap">

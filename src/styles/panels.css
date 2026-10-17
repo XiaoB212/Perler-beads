@@ -750,6 +750,38 @@
   border-bottom: none;
 }
 
+/* ---------- 分板聚焦提示 ---------- */
+.board-focus-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  margin-bottom: 10px;
+  border-radius: 9px;
+  background: var(--fill-1);
+  border: 1px solid var(--line);
+}
+.board-focus-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+.board-focus-info b {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.board-focus-info span {
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: var(--ink-3);
+}
+.board-focus-row .btn {
+  flex: 0 0 auto;
+}
+
 @media (max-width: 760px) {
   .swatch-grid.lib {
     max-height: none;

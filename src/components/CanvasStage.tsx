@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, bresenham } from '../core/store';
 import { stageColors, type ResolvedTheme } from '../core/theme';
 import { readableTextColor } from '../core/color';
+import { boardGuideLines, boardLabel, focusRect } from '../core/board';
 import type { PatternDoc } from '../core/types';
 
 interface Props {
@@ -40,6 +41,9 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const zoom = useEditor((s) => s.zoom);
   const pan = useEditor((s) => s.pan);
   const hover = useEditor((s) => s.hover);
+  const focus = useEditor((s) => s.focus);
+  const focusOnCell = useEditor((s) => s.focusOnCell);
+  const setFocus = useEditor((s) => s.setFocus);
   const setZoom = useEditor((s) => s.setZoom);
   const setPan = useEditor((s) => s.setPan);
   const setHover = useEditor((s) => s.setHover);
@@ -90,7 +94,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   }, [size.h, doc.height, cell, pan.y]);
 
   const cellFromEvent = useCallback(
-    (e: React.PointerEvent | PointerEvent): { x: number; y: number } => {
+    (e: React.PointerEvent | React.MouseEvent | PointerEvent): { x: number; y: number } => {
       const rect = canvasRef.current!.getBoundingClientRect();
       const px = e.clientX - rect.left;
       const py = e.clientY - rect.top;
@@ -266,41 +270,98 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         ctx.lineTo(originX + boardW, py);
       }
       ctx.stroke();
-      // 每 5 格
+      // 每 5 格加深：分板时由板内细线 + 板边界代替，避免两套线叠在一起
+      if (!(flags.pegboard && doc.pegboard > 0)) {
+        ctx.beginPath();
+        ctx.strokeStyle = C.gridStrong;
+        ctx.lineWidth = 1;
+        for (let x = 0; x <= doc.width; x += 5) {
+          const px = Math.round(originX + x * cell) + 0.5;
+          ctx.moveTo(px, originY);
+          ctx.lineTo(px, originY + boardH);
+        }
+        for (let y = 0; y <= doc.height; y += 5) {
+          const py = Math.round(originY + y * cell) + 0.5;
+          ctx.moveTo(originX, py);
+          ctx.lineTo(originX + boardW, py);
+        }
+        ctx.stroke();
+      }
+    }
+
+    // 拼豆板分界：板内每 5 格一条细线 + 板边界一条粗线。
+    // 学自 Jett-Wu/Perler_Beads_Generator 的 guideLineCenters：
+    // 29 格板的 5 格线应该相对「每块板的起点」数（5/10/15/20/25），
+    // 而不是全局 5/10/…，否则线会横穿板边界，看着像尺寸画错了。
+    if (flags.pegboard && doc.pegboard > 0) {
+      const bs = doc.pegboard;
+      const innerX = boardGuideLines(doc.width, bs);
+      const innerY = boardGuideLines(doc.height, bs);
+
+      // 板内细分线：先铺一层细线，再单独描板边界，两者层级分明
       ctx.beginPath();
       ctx.strokeStyle = C.gridStrong;
       ctx.lineWidth = 1;
-      for (let x = 0; x <= doc.width; x += 5) {
-        const px = Math.round(originX + x * cell) + 0.5;
+      for (const gx of innerX) {
+        const px = Math.round(originX + gx * cell) + 0.5;
         ctx.moveTo(px, originY);
         ctx.lineTo(px, originY + boardH);
       }
-      for (let y = 0; y <= doc.height; y += 5) {
-        const py = Math.round(originY + y * cell) + 0.5;
+      for (const gy of innerY) {
+        const py = Math.round(originY + gy * cell) + 0.5;
         ctx.moveTo(originX, py);
         ctx.lineTo(originX + boardW, py);
       }
       ctx.stroke();
-    }
 
-    // 拼豆板分界
-    if (flags.pegboard && doc.pegboard > 0) {
-      ctx.beginPath();
+      // 板边界：奇偶交替实线 / 虚线，方便一眼数清第几块板
       ctx.strokeStyle = C.pegboard;
-      ctx.lineWidth = 1.6;
-      ctx.setLineDash([6, 4]);
-      for (let x = doc.pegboard; x < doc.width; x += doc.pegboard) {
+      let edgeIndex = 0;
+      for (let x = bs; x < doc.width; x += bs) {
         const px = Math.round(originX + x * cell) + 0.5;
+        ctx.beginPath();
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash(edgeIndex % 2 === 0 ? [] : [5, 4]);
         ctx.moveTo(px, originY);
         ctx.lineTo(px, originY + boardH);
+        ctx.stroke();
+        edgeIndex++;
       }
-      for (let y = doc.pegboard; y < doc.height; y += doc.pegboard) {
+      edgeIndex = 0;
+      for (let y = bs; y < doc.height; y += bs) {
         const py = Math.round(originY + y * cell) + 0.5;
+        ctx.beginPath();
+        ctx.lineWidth = 1.8;
+        ctx.setLineDash(edgeIndex % 2 === 0 ? [] : [5, 4]);
         ctx.moveTo(originX, py);
         ctx.lineTo(originX + boardW, py);
+        ctx.stroke();
+        edgeIndex++;
       }
-      ctx.stroke();
       ctx.setLineDash([]);
+
+      // 板号 A1 / B2：格够大才画，否则糊成一团
+      if (flags.boardIds && cell >= 9) {
+        const fs = Math.max(8, Math.min(13, cell * 0.5));
+        ctx.font = `700 ${fs}px ui-monospace, monospace`;
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'top';
+        const cols = Math.ceil(doc.width / bs);
+        const rows = Math.ceil(doc.height / bs);
+        for (let row = 0; row < rows; row++) {
+          for (let col = 0; col < cols; col++) {
+            const px = originX + col * bs * cell + 3;
+            const py = originY + row * bs * cell + 2;
+            const label = boardLabel(col, row);
+            // 描一圈底色再写字，压在豆子上也读得清
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = C.board;
+            ctx.strokeText(label, px, py);
+            ctx.fillStyle = C.pegboard;
+            ctx.fillText(label, px, py);
+          }
+        }
+      }
     }
 
     // 对称轴
@@ -329,19 +390,40 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     roundRect(ctx, originX - 0.5, originY - 0.5, boardW + 1, boardH + 1, 6);
     ctx.stroke();
 
+    // 聚焦某一块板时，把其他板压暗 + 框出当前板
+    if (focus && doc.pegboard > 0) {
+      const fr = focusRect(focus, doc.width, doc.height);
+      const fx = originX + fr.x * cell;
+      const fy = originY + fr.y * cell;
+      const fw = fr.w * cell;
+      const fh = fr.h * cell;
+      ctx.save();
+      // evenodd 挖洞：只压暗当前板以外的区域，不用逐格算
+      ctx.beginPath();
+      ctx.rect(originX, originY, boardW, boardH);
+      ctx.rect(fx, fy, fw, fh);
+      ctx.fillStyle = theme === 'light' ? 'rgba(246,246,243,0.74)' : 'rgba(14,16,19,0.72)';
+      ctx.fill('evenodd');
+      ctx.strokeStyle = C.pegboard;
+      ctx.lineWidth = 2.4;
+      ctx.strokeRect(fx + 1, fy + 1, fw - 2, fh - 2);
+      ctx.restore();
+    }
+
     // 标尺
     if (flags.rulers && cell >= 6) {
       ctx.fillStyle = C.ruler;
       ctx.font = '500 9.5px ui-monospace, monospace';
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      const stepX = cell * (cell >= 20 ? 5 : 10);
+      // 格越小标签越稀：至少留 34px 才写得下一个 3 位数，否则挤成一团
+      const labelEvery = Math.max(5, Math.ceil(Math.ceil(34 / cell) / 5) * 5);
       for (let x = 0; x <= doc.width; x++) {
         const px = originX + x * cell;
         if (px < 6 || px > size.w - 6) continue;
         if (x % 5 === 0) {
           ctx.fillRect(px - 0.5, originY - 12, 1, 5);
-          if (x > 0) ctx.fillText(String(x), px, originY - 20);
+          if (x > 0 && x % labelEvery === 0) ctx.fillText(String(x), px, originY - 20);
         } else if (cell >= 12) {
           ctx.fillRect(px - 0.5, originY - 9, 1, 3);
         }
@@ -352,14 +434,13 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         if (py < 6 || py > size.h - 6) continue;
         if (y % 5 === 0) {
           ctx.fillRect(originX - 12, py - 0.5, 5, 1);
-          if (y > 0) ctx.fillText(String(y), originX - 16, py);
+          if (y > 0 && y % labelEvery === 0) ctx.fillText(String(y), originX - 16, py);
         } else if (cell >= 12) {
           ctx.fillRect(originX - 9, py - 0.5, 3, 1);
         }
       }
-      void stepX;
     }
-  }, [doc, size, cell, originX, originY, flags, C, theme]);
+  }, [doc, size, cell, originX, originY, flags, C, theme, focus]);
 
   // ===== 覆盖层（光标 / 形状预览） =====
   useEffect(() => {
@@ -641,6 +722,33 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     };
   }, []);
 
+  // 适应窗口请求（顶栏 / 快捷键 0 都走这里，因为只有这里知道容器真实尺寸）
+  const fitRequest = useEditor((s) => s.fitRequest);
+  useEffect(() => {
+    if (!fitRequest || !size.w || !size.h) return;
+    const s = useEditor.getState();
+    const z = Math.min((size.w - 80) / doc.width, (size.h - 80) / doc.height);
+    s.setZoom(Math.max(2, Math.min(40, z)));
+    s.setPan({ x: 0, y: 0 });
+  }, [fitRequest, size.w, size.h, doc.width, doc.height]);
+
+  // 键盘光标移出可视区时自动把画布挪过来，否则用方向键会「画到看不见的地方」。
+  // 只在 cursorTick 变化（键盘移动）时触发，鼠标悬停不能把画布拖走。
+  const cursorTick = useEditor((s) => s.cursorTick);
+  useEffect(() => {
+    if (!cursorTick || !hover || !size.w || !size.h) return;
+    const margin = 48;
+    const cx = originX + hover.x * cell + cell / 2;
+    const cy = originY + hover.y * cell + cell / 2;
+    let dx = 0;
+    let dy = 0;
+    if (cx < margin) dx = margin - cx;
+    else if (cx > size.w - margin) dx = size.w - margin - cx;
+    if (cy < margin) dy = margin - cy;
+    else if (cy > size.h - margin) dy = size.h - margin - cy;
+    if (dx || dy) setPan({ x: pan.x + dx, y: pan.y + dy });
+  }, [cursorTick, hover, originX, originY, cell, size.w, size.h, pan.x, pan.y, setPan]);
+
   const cursor =
     tool === 'pan' || spaceDown
       ? 'grab'
@@ -667,9 +775,23 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
           endDrag();
         }}
         onWheel={onWheel}
+        onDoubleClick={(e) => {
+          // 双击某块板 = 进入 / 退出「只看这块板」，比分板设置里点按钮快得多
+          if (doc.pegboard <= 0) return;
+          const { x, y } = cellFromEvent(e);
+          if (!inBounds(x, y)) return;
+          focusOnCell(x, y);
+        }}
         onContextMenu={(e) => e.preventDefault()}
       />
       <canvas ref={overlayRef} className="stage-overlay" />
+      {focus && doc.pegboard > 0 && (
+        <button className="stage-focus-chip" onClick={() => setFocus(null)} title="退出聚焦（只看全图）">
+          <span className="focus-dot" />
+          只看板 {boardLabel(focus.col, focus.row)}
+          <span className="focus-exit">×</span>
+        </button>
+      )}
       <div className="stage-zoombar">
         <button className="zbtn" onClick={() => setZoom(cell / 1.25)} title="缩小">
           <svg width="14" height="14" viewBox="0 0 14 14">
@@ -699,7 +821,8 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         </button>
       </div>
       <div className="stage-hint">
-        <span className="kbd">空格</span> 拖动画布 · <span className="kbd">Ctrl</span>+滚轮 缩放
+        <span className="kbd">方向键</span> 移光标 · <span className="kbd">Enter</span> 落笔 ·{' '}
+        <span className="kbd">空格</span> 拖动 · <span className="kbd">?</span> 全部快捷键
       </div>
     </div>
   );

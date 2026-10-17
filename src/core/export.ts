@@ -82,7 +82,8 @@ function inkFor(hex: string): string {
 /** 主渲染：把图纸画到 canvas */
 export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLCanvasElement {
   const { width, height, cells, palette } = doc;
-  const cs = Math.max(2, opts.cellSize);
+  // 允许小于 1px 的格宽：5000 格画布的缩略图只能靠亚像素缩小才画得下
+  const cs = Math.max(0.35, opts.cellSize);
   const bs = opts.boardSize ?? 0;
   const gap = opts.boardGap ?? 1.2;
   const lay = boardLayout(doc, bs, gap);
@@ -215,8 +216,22 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
   return canvas;
 }
 
+/**
+ * 浏览器 canvas 的安全边界：单边 16384、总面积约 2.68 亿像素（Chrome 实测）。
+ * 5000×5000 的图纸按默认 24px/格 会算出 12 万像素宽，必然失败，必须先把 cellSize 压下来。
+ */
+const CANVAS_MAX_EDGE = 16384;
+const CANVAS_MAX_AREA = 240_000_000;
+
+export function safeCellSize(width: number, height: number, want: number, pad = 64): number {
+  const byEdge = Math.min(CANVAS_MAX_EDGE / Math.max(1, width), CANVAS_MAX_EDGE / Math.max(1, height));
+  const byArea = Math.sqrt(CANVAS_MAX_AREA / Math.max(1, width * height));
+  return Math.max(0.5, Math.min(want, byEdge, byArea, (CANVAS_MAX_EDGE - pad) / Math.max(1, Math.max(width, height))));
+}
+
 export async function exportPNG(doc: PatternDoc, opts: RenderOptions) {
-  const canvas = renderPatternCanvas(doc, opts);
+  const cellSize = safeCellSize(doc.width, doc.height, opts.cellSize);
+  const canvas = renderPatternCanvas(doc, { ...opts, cellSize });
   await new Promise<void>((resolve) => {
     canvas.toBlob((blob) => {
       if (blob) downloadBlob(blob, `${safeFileName(doc.name)}.png`);
@@ -1083,7 +1098,7 @@ export function parseProject(text: string): PatternDoc | null {
 export function docToThumb(doc: PatternDoc, size = 120): string {
   const canvas = renderPatternCanvas(doc, {
     ...DEFAULT_RENDER,
-    cellSize: Math.max(2, Math.floor(size / Math.max(doc.width, doc.height))),
+    cellSize: Math.max(1, Math.min(8, Math.floor(size / Math.max(doc.width, doc.height)))),
     coords: false,
     grid: false,
     holes: false,

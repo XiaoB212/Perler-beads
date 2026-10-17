@@ -318,3 +318,10 @@ export const IconCode = (p: P) => (
     <path d="M9 8 5 12l4 4M15 8l4 4-4 4" />
   </svg>
 );
+
+export const IconKeyboard = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="2.6" y="6" width="18.8" height="12" rx="2.4" />
+    <path d="M6.4 10h.01M9.6 10h.01M12.8 10h.01M16 10h.01M6.4 13.2h.01M16 13.2h.01M9.2 13.2h5.6" />
+  </svg>
+);

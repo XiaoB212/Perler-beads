@@ -62,7 +62,10 @@ export interface ViewFlags {
   grid: boolean;
   rulers: boolean;
   beadHoles: boolean;
+  /** 画拼豆板分界线 */
   pegboard: boolean;
+  /** 在每块板上标 A1 / B2 之类的板号 */
+  boardIds: boolean;
   symmetryX: boolean;
   symmetryY: boolean;
   progressMode: boolean;
@@ -76,6 +79,7 @@ export const DEFAULT_FLAGS: ViewFlags = {
   rulers: true,
   beadHoles: true,
   pegboard: true,
+  boardIds: true,
   symmetryX: false,
   symmetryY: false,
   progressMode: false,
@@ -91,6 +95,16 @@ export interface Snapshot {
   progress: Uint8Array;
   palette: BeadColor[];
   pegboard: number;
+  /** 聚焦模式：只看某一块板（null = 看全图） */
+  focus: FocusState | null;
+}
+
+/** 分板聚焦：把视图锁在某一块板上，拼装时不会画到别的板去 */
+export interface FocusState {
+  /** 单板格数（快照当前 doc.pegboard，切板尺寸时自动失效） */
+  size: number;
+  col: number;
+  row: number;
 }
 
 /** 工程文件（.perler.json） */

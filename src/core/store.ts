@@ -1,10 +1,18 @@
 import { create } from 'zustand';
-import type { BeadColor, PatternDoc, Snapshot, Tool, ViewFlags } from '../core/types';
+import type { BeadColor, FocusState, PatternDoc, Snapshot, Tool, ViewFlags } from '../core/types';
 import { DEFAULT_FLAGS } from '../core/types';
 import { DEFAULT_PALETTE_KEY, palettePreset } from '../core/palette';
 import { uid } from '../core/util';
 import { loadDoc, readIndex } from './storage';
 import { createDemoDoc } from './demo';
+import {
+  DEFAULT_PEGBOARD,
+  boardCols,
+  boardRows,
+  clampCanvasPair,
+  clampPegboard,
+  focusRect,
+} from './board';
 
 export interface HoverCell {
   x: number;
@@ -23,6 +31,16 @@ export interface DocMeta {
 }
 
 const HISTORY_LIMIT = 60;
+
+/**
+ * 撤销快照会整份拷贝 cells（Uint16）+ progress（Uint8），约 3 字节/格。
+ * 小画布给满 60 步；超大画布按内存预算削减，避免 5000×5000 时一次撤销就吃掉 75MB。
+ */
+function historyLimitFor(width: number, height: number): number {
+  const bytes = Math.max(1, width * height) * 3;
+  const budget = 240 * 1024 * 1024;
+  return Math.max(2, Math.min(HISTORY_LIMIT, Math.floor(budget / bytes)));
+}
 
 const FIRST_VISIT_KEY = 'perler-studio:visited';
 
@@ -51,23 +69,24 @@ export function createDoc(
   paletteKey = DEFAULT_PALETTE_KEY,
   name = '未命名图纸',
 ): PatternDoc {
+  const { w, h } = clampCanvasPair(width, height);
   const palette = palettePreset(paletteKey);
   return {
     id: uid(),
     name,
-    width,
-    height,
-    cells: new Uint16Array(width * height),
-    progress: new Uint8Array(width * height),
+    width: w,
+    height: h,
+    cells: new Uint16Array(w * h),
+    progress: new Uint8Array(w * h),
     palette,
-    pegboard: 29,
+    pegboard: DEFAULT_PEGBOARD,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     notes: '',
   };
 }
 
-function snapshot(doc: PatternDoc): Snapshot {
+function snapshot(doc: PatternDoc, focus: FocusState | null): Snapshot {
   return {
     width: doc.width,
     height: doc.height,
@@ -75,6 +94,7 @@ function snapshot(doc: PatternDoc): Snapshot {
     progress: doc.progress.slice(),
     palette: doc.palette.map((c) => ({ ...c })),
     pegboard: doc.pegboard,
+    focus,
   };
 }
 
@@ -98,6 +118,19 @@ export interface PaintOptions {
   value?: number;
 }
 
+/**
+ * 这一格能不能画：越界不行，聚焦模式下出了这块板也不行。
+ *
+ * 所有写入路径（画笔 / 直线 / 形状 / 油漆桶 / 进度勾选）都要过这一关，
+ * 否则「只看一块板」时还会悄悄改到隔壁板的数据。
+ */
+function allows(focus: FocusState | null, width: number, height: number, x: number, y: number): boolean {
+  if (x < 0 || y < 0 || x >= width || y >= height) return false;
+  if (!focus) return true;
+  const r = focusRect(focus, width, height);
+  return x >= r.x && y >= r.y && x < r.x + r.w && y < r.y + r.h;
+}
+
 interface EditorState {
   doc: PatternDoc;
   tool: Tool;
@@ -111,11 +144,20 @@ interface EditorState {
   past: Snapshot[];
   future: Snapshot[];
   strokeActive: boolean;
+  /**
+   * 分板聚焦：只看某一块板。绘制会被夹在这块板的矩形里，
+   * 拼一块 29×29 的板时不会误画到隔壁板。
+   */
+  focus: FocusState | null;
   /** 进度模式下本次拖动是「标记已拼」还是「取消已拼」 */
   progressTarget: 0 | 1;
   toast: { id: number; text: string; kind?: 'ok' | 'warn' } | null;
   dirty: boolean;
   docMetaList: DocMeta[];
+  /** 递增即触发一次「适应窗口」，由 CanvasStage 监听（它才知道容器真实尺寸） */
+  fitRequest: number;
+  /** 递增即表示「键盘移动了光标」，画布据此自动跟随（鼠标悬停不应触发） */
+  cursorTick: number;
 
   setTool: (t: Tool) => void;
   setColorIndex: (i: number) => void;
@@ -127,6 +169,13 @@ interface EditorState {
   setPan: (p: { x: number; y: number }) => void;
   setHover: (h: HoverCell | null) => void;
   notify: (text: string, kind?: 'ok' | 'warn') => void;
+
+  /** 进入/退出某块板的聚焦模式（传 null 表示看全图） */
+  setFocus: (f: FocusState | null) => void;
+  /** 以某一格为准聚焦它所在的板 */
+  focusOnCell: (x: number, y: number) => void;
+  /** 在当前板序里前后切换聚焦的板，方便「拼完这块换下一块」 */
+  stepFocus: (delta: number) => void;
 
   beginStroke: () => void;
   endStroke: () => void;
@@ -159,6 +208,11 @@ interface EditorState {
   applyImported: (cells: Uint16Array, palette: BeadColor[], width: number, height: number, name?: string) => void;
   markClean: () => void;
   setDocMetaList: (l: DocMeta[]) => void;
+  requestFit: () => void;
+  /** 键盘光标：按格移动（step 默认 1，Shift 时 5） */
+  moveCursor: (dx: number, dy: number, step?: number) => void;
+  /** 在键盘光标处落笔 / 擦除 / 勾选进度 */
+  paintAtCursor: (erase?: boolean) => void;
 }
 
 export const useEditor = create<EditorState>((set, get) => ({
@@ -174,10 +228,13 @@ export const useEditor = create<EditorState>((set, get) => ({
   past: [],
   future: [],
   strokeActive: false,
+  focus: null,
   progressTarget: 1,
   toast: null,
   dirty: false,
   docMetaList: [],
+  fitRequest: 0,
+  cursorTick: 0,
 
   setTool: (t) => set({ tool: t }),
   setColorIndex: (i) => set({ colorIndex: i, tool: get().tool === 'picker' ? 'pencil' : get().tool }),
@@ -197,10 +254,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   beginStroke: () => {
-    const { doc, past } = get();
-    const snap = snapshot(doc);
+    const { doc, past, focus } = get();
+    const snap = snapshot(doc, focus);
     const next = past.concat([snap]);
-    if (next.length > HISTORY_LIMIT) next.shift();
+    const limit = historyLimitFor(doc.width, doc.height);
+    while (next.length > limit) next.shift();
     set({ past: next, future: [], strokeActive: true });
   },
 
@@ -211,33 +269,35 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   undo: () => {
-    const { past, future, doc } = get();
+    const { past, future, doc, focus } = get();
     if (!past.length) return;
     const prev = past[past.length - 1];
-    const cur = snapshot(doc);
+    const cur = snapshot(doc, focus);
     set({
       doc: restore(doc, prev),
       past: past.slice(0, -1),
       future: future.concat([cur]),
+      focus: prev.focus,
       dirty: true,
     });
   },
 
   redo: () => {
-    const { past, future, doc } = get();
+    const { past, future, doc, focus } = get();
     if (!future.length) return;
     const next = future[future.length - 1];
-    const cur = snapshot(doc);
+    const cur = snapshot(doc, focus);
     set({
       doc: restore(doc, next),
       past: past.concat([cur]),
       future: future.slice(0, -1),
+      focus: next.focus,
       dirty: true,
     });
   },
 
   paintCell: (x, y, opts = {}) => {
-    const { doc, colorIndex, brushSize, flags } = get();
+    const { doc, colorIndex, brushSize, flags, focus } = get();
     const v = opts.value ?? colorIndex + 1;
     const symX = opts.symmetryX ?? flags.symmetryX;
     const symY = opts.symmetryY ?? flags.symmetryY;
@@ -256,6 +316,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
     let changed = false;
     for (const [px, py] of targets) {
+      if (!allows(focus, doc.width, doc.height, px, py)) continue;
       const i = py * doc.width + px;
       if (doc.cells[i] !== v) {
         doc.cells[i] = v;
@@ -267,14 +328,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   paintProgressCell: (x, y, value) => {
-    const { doc, brushSize } = get();
+    const { doc, brushSize, focus } = get();
     const r = Math.floor((brushSize - 1) / 2);
     let changed = false;
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
         const px = x + dx;
         const py = y + dy;
-        if (px < 0 || py < 0 || px >= doc.width || py >= doc.height) continue;
+        if (!allows(focus, doc.width, doc.height, px, py)) continue;
         const i = py * doc.width + px;
         if (doc.cells[i] === 0) continue;
         if (doc.progress[i] !== value) {
@@ -287,8 +348,8 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   floodFill: (x, y) => {
-    const { doc, colorIndex } = get();
-    if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) return;
+    const { doc, colorIndex, focus } = get();
+    if (!allows(focus, doc.width, doc.height, x, y)) return;
     const target = doc.cells[y * doc.width + x];
     const v = colorIndex + 1;
     if (target === v) return;
@@ -303,16 +364,16 @@ export const useEditor = create<EditorState>((set, get) => ({
       cells[i] = v;
       const px = i % doc.width;
       const py = (i / doc.width) | 0;
-      if (px > 0) stack.push(i - 1);
-      if (px < doc.width - 1) stack.push(i + 1);
-      if (py > 0) stack.push(i - doc.width);
-      if (py < doc.height - 1) stack.push(i + doc.width);
+      if (allows(focus, doc.width, doc.height, px - 1, py)) stack.push(i - 1);
+      if (allows(focus, doc.width, doc.height, px + 1, py)) stack.push(i + 1);
+      if (allows(focus, doc.width, doc.height, px, py - 1)) stack.push(i - doc.width);
+      if (allows(focus, doc.width, doc.height, px, py + 1)) stack.push(i + doc.width);
     }
     set({ doc: { ...doc, updatedAt: Date.now() }, dirty: true });
   },
 
   drawLine: (x0, y0, x1, y1) => {
-    const { doc, colorIndex, brushSize, flags } = get();
+    const { doc, colorIndex, brushSize, flags, focus } = get();
     const v = colorIndex + 1;
     const pts = bresenham(x0, y0, x1, y1);
     const r = Math.floor((brushSize - 1) / 2);
@@ -321,7 +382,7 @@ export const useEditor = create<EditorState>((set, get) => ({
         for (let dx = -r; dx <= r; dx++) {
           const px = x + dx;
           const py = y + dy;
-          if (px < 0 || py < 0 || px >= doc.width || py >= doc.height) continue;
+          if (!allows(focus, doc.width, doc.height, px, py)) continue;
           doc.cells[py * doc.width + px] = v;
           if (flags.symmetryX) doc.cells[py * doc.width + (doc.width - 1 - px)] = v;
           if (flags.symmetryY) doc.cells[(doc.height - 1 - py) * doc.width + px] = v;
@@ -334,14 +395,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   drawShape: (kind, x0, y0, x1, y1) => {
-    const { doc, colorIndex, flags, shapeFill } = get();
+    const { doc, colorIndex, flags, shapeFill, focus } = get();
     const v = colorIndex + 1;
     const minX = Math.min(x0, x1);
     const maxX = Math.max(x0, x1);
     const minY = Math.min(y0, y1);
     const maxY = Math.max(y0, y1);
     const setPx = (x: number, y: number) => {
-      if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) return;
+      if (!allows(focus, doc.width, doc.height, x, y)) return;
       doc.cells[y * doc.width + x] = v;
       if (flags.symmetryX) doc.cells[y * doc.width + (doc.width - 1 - x)] = v;
       if (flags.symmetryY) doc.cells[(doc.height - 1 - y) * doc.width + x] = v;
@@ -382,10 +443,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       past: [],
       future: [],
       colorIndex: 0,
-      zoom: Math.max(4, Math.min(24, Math.floor(680 / Math.max(w, h)))),
+      zoom: Math.max(4, Math.min(24, Math.floor(680 / Math.max(doc.width, doc.height)))),
       pan: { x: 0, y: 0 },
       dirty: true,
       hover: null,
+      focus: null,
     });
   },
 
@@ -399,33 +461,85 @@ export const useEditor = create<EditorState>((set, get) => ({
       pan: { x: 0, y: 0 },
       dirty: false,
       hover: null,
+      focus: null,
     });
   },
 
   renameDoc: (name) => set({ doc: { ...get().doc, name, updatedAt: Date.now() }, dirty: true }),
 
   resizeDoc: (w, h) => {
-    const { doc } = get();
-    const snap = snapshot(doc);
+    const { doc, focus } = get();
+    const snap = snapshot(doc, focus);
     const next = createDoc(w, h, 'mard', doc.name);
     next.palette = doc.palette.map((c) => ({ ...c }));
     next.pegboard = doc.pegboard;
     next.createdAt = doc.createdAt;
     next.notes = doc.notes;
     next.id = doc.id;
-    const copyW = Math.min(w, doc.width);
-    const copyH = Math.min(h, doc.height);
+    // 用 clamp 之后的真实尺寸拷数据：直接拿入参 w/h 会在超限时越界写
+    const nextW = next.width;
+    const nextH = next.height;
+    const copyW = Math.min(nextW, doc.width);
+    const copyH = Math.min(nextH, doc.height);
     for (let y = 0; y < copyH; y++) {
       for (let x = 0; x < copyW; x++) {
-        next.cells[y * w + x] = doc.cells[y * doc.width + x];
-        next.progress[y * w + x] = doc.progress[y * doc.width + x];
+        next.cells[y * nextW + x] = doc.cells[y * doc.width + x];
+        next.progress[y * nextW + x] = doc.progress[y * doc.width + x];
       }
     }
-    set({ doc: next, past: get().past.concat([snap]), future: [], dirty: true });
+    // 尺寸变了，原来聚焦的那块板可能已经不存在
+    const nextFocus =
+      focus && focus.col < boardCols(next.width, focus.size) && focus.row < boardRows(next.height, focus.size)
+        ? focus
+        : null;
+    set({ doc: next, past: get().past.concat([snap]), future: [], dirty: true, focus: nextFocus });
   },
 
-  setPegboard: (n) => set({ doc: { ...get().doc, pegboard: n, updatedAt: Date.now() }, dirty: true }),
+  setPegboard: (n) => {
+    const pegboard = clampPegboard(n);
+    // 换板规格后旧聚焦坐标会指错地方，直接退回全图
+    set({
+      doc: { ...get().doc, pegboard, updatedAt: Date.now() },
+      dirty: true,
+      focus: null,
+    });
+  },
   setNotes: (s) => set({ doc: { ...get().doc, notes: s }, dirty: true }),
+
+  setFocus: (f) => {
+    const { doc } = get();
+    if (!f) {
+      set({ focus: null });
+      return;
+    }
+    if (doc.pegboard <= 0) return;
+    const col = Math.max(0, Math.min(boardCols(doc.width, doc.pegboard) - 1, f.col));
+    const row = Math.max(0, Math.min(boardRows(doc.height, doc.pegboard) - 1, f.row));
+    set({ focus: { size: doc.pegboard, ...{ col, row } } });
+  },
+
+  focusOnCell: (x, y) => {
+    const { doc, focus, setFocus } = get();
+    if (doc.pegboard <= 0) return;
+    // 已经聚焦在同一块板上：再点一次就退出聚焦（像个开关）
+    if (focus && Math.floor(x / doc.pegboard) === focus.col && Math.floor(y / doc.pegboard) === focus.row) {
+      setFocus(null);
+      return;
+    }
+    setFocus({ size: doc.pegboard, col: Math.floor(x / doc.pegboard), row: Math.floor(y / doc.pegboard) });
+  },
+
+  stepFocus: (delta) => {
+    const { doc, focus, setFocus } = get();
+    if (doc.pegboard <= 0) return;
+    const cols = boardCols(doc.width, doc.pegboard);
+    const rows = boardRows(doc.height, doc.pegboard);
+    const total = cols * rows;
+    if (total <= 0) return;
+    const cur = focus ? focus.row * cols + focus.col : -1;
+    const next = cur < 0 ? (delta > 0 ? 0 : total - 1) : (cur + delta + total) % total;
+    setFocus({ size: doc.pegboard, col: next % cols, row: Math.floor(next / cols) });
+  },
 
   addCustomColor: (c) => {
     const { doc } = get();
@@ -510,11 +624,54 @@ export const useEditor = create<EditorState>((set, get) => ({
       pan: { x: 0, y: 0 },
       dirty: true,
       hover: null,
+      focus: null,
     });
   },
 
   markClean: () => set({ dirty: false }),
   setDocMetaList: (l) => set({ docMetaList: l }),
+  requestFit: () => set({ fitRequest: get().fitRequest + 1 }),
+
+  moveCursor: (dx, dy, step = 1) => {
+    const { doc, hover } = get();
+    // 还没有光标时，先放到图纸中央
+    const cur = hover ?? { x: Math.floor(doc.width / 2), y: Math.floor(doc.height / 2) };
+    const nx = Math.max(0, Math.min(doc.width - 1, cur.x + dx * step));
+    const ny = Math.max(0, Math.min(doc.height - 1, cur.y + dy * step));
+    set({ hover: { x: nx, y: ny }, cursorTick: get().cursorTick + 1 });
+  },
+
+  paintAtCursor: (erase = false) => {
+    const { doc, hover, tool, colorIndex, flags } = get();
+    // 还没有光标：先把光标放到图纸中央，这一步不落笔
+    if (!hover) {
+      set({
+        hover: { x: Math.floor(doc.width / 2), y: Math.floor(doc.height / 2) },
+        cursorTick: get().cursorTick + 1,
+      });
+      return;
+    }
+    const { x, y } = hover;
+    if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) return;
+    if (flags.progressMode) {
+      const i = y * doc.width + x;
+      get().beginStroke();
+      get().paintProgressCell(x, y, doc.cells[i] && doc.progress[i] ? 0 : 1);
+      get().endStroke();
+      return;
+    }
+    if (tool === 'picker') {
+      const v = doc.cells[y * doc.width + x];
+      if (v) set({ colorIndex: v - 1 });
+      return;
+    }
+    get().beginStroke();
+    if (erase || tool === 'eraser') get().paintCell(x, y, { value: 0 });
+    else if (tool === 'bucket') get().floodFill(x, y);
+    else get().paintCell(x, y);
+    get().endStroke();
+    void colorIndex;
+  },
 }));
 
 export function bresenham(x0: number, y0: number, x1: number, y1: number): [number, number][] {
