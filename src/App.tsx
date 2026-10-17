@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from './core/store';
 import { applyTheme, getThemeMode, resolveTheme, setThemeMode as setThemeModePersist, watchSystemTheme, type ThemeMode } from './core/theme';
 import CanvasStage from './components/CanvasStage';
@@ -48,6 +48,20 @@ import { boardCount } from './core/board';
 type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys';
 type SideTab = 'colors' | 'usage' | 'settings';
 
+/** 右侧面板宽度：可拖拽调整，拖完记在本地，下次打开还是这个宽度 */
+const SIDE_W_KEY = 'perler-studio:side-width';
+const SIDE_W_MIN = 240;
+const SIDE_W_MAX = 620;
+function readSideWidth(): number {
+  try {
+    const n = Number(localStorage.getItem(SIDE_W_KEY));
+    if (Number.isFinite(n) && n >= SIDE_W_MIN && n <= SIDE_W_MAX) return Math.round(n);
+  } catch {
+    /* 隐私模式下 localStorage 会抛异常，用默认值即可 */
+  }
+  return 300;
+}
+
 const TOOLS: {
   key: Tool;
   label: string;
@@ -93,6 +107,7 @@ export default function App() {
   const [keymap, setKeymap] = useState<KeyMap>(() => loadKeymap());
 
   const [dialog, setDialog] = useState<Dialog>(null);
+  const [colorManagerTab, setColorManagerTab] = useState<'doc' | 'preset' | 'io'>('doc');
   const [tab, setTab] = useState<SideTab>('colors');
   const [sheet, setSheet] = useState<null | SideTab>(null);
   const [titleDraft, setTitleDraft] = useState(doc.name);
@@ -100,8 +115,39 @@ export default function App() {
   const [dragOver, setDragOver] = useState(false);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
   const [resolved, setResolved] = useState(() => resolveTheme(getThemeMode()));
+  const [sideW, setSideW] = useState(() => readSideWidth());
+  const sideDragRef = useRef<{ x: number; w: number; next: number } | null>(null);
 
   useEffect(() => setTitleDraft(doc.name), [doc.name, doc.id]);
+
+  // 拖动右侧面板左边缘调宽度：只改 CSS 变量，不触发画布重排逻辑
+  const onSideResizeDown = useCallback(
+    (e: React.PointerEvent) => {
+      e.preventDefault();
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+      sideDragRef.current = { x: e.clientX, w: sideW, next: sideW };
+    },
+    [sideW],
+  );
+  const onSideResizeMove = useCallback((e: React.PointerEvent) => {
+    const d = sideDragRef.current;
+    if (!d) return;
+    const next = Math.max(SIDE_W_MIN, Math.min(SIDE_W_MAX, d.w - (e.clientX - d.x)));
+    // 记在 ref 里：pointerup 时读的 sideW 可能是这一帧之前的旧值
+    d.next = next;
+    setSideW(next);
+  }, []);
+  const onSideResizeUp = useCallback((e: React.PointerEvent) => {
+    const d = sideDragRef.current;
+    if (!d) return;
+    sideDragRef.current = null;
+    (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
+    try {
+      localStorage.setItem(SIDE_W_KEY, String(Math.round(d.next)));
+    } catch {
+      /* 忽略写入失败 */
+    }
+  }, []);
 
   // 主题：写 localStorage + 挂 <html data-theme>，并跟随系统切换
   const setThemeMode = useCallback((m: ThemeMode) => {
@@ -379,7 +425,15 @@ export default function App() {
   const cur = doc.palette[colorIndex];
 
   const sideBody = (t: SideTab) => {
-    if (t === 'colors') return <ColorPanel onOpenManager={() => setDialog('colors')} />;
+    if (t === 'colors')
+      return (
+        <ColorPanel
+          onOpenManager={(tab) => {
+            setColorManagerTab(tab ?? 'doc');
+            setDialog('colors');
+          }}
+        />
+      );
     if (t === 'usage') return <UsagePanel />;
     return <SettingsPanel themeMode={themeMode} onThemeChange={setThemeMode} />;
   };
@@ -511,7 +565,14 @@ export default function App() {
               <span className="rail-label">对称</span>
             </button>
             <div className="rail-sep" />
-            <button className="rail-btn" onClick={() => setDialog('colors')} title="色号管理">
+            <button
+              className="rail-btn"
+              onClick={() => {
+                setColorManagerTab('doc');
+                setDialog('colors');
+              }}
+              title="色号管理"
+            >
               <IconPalette width={17} height={17} />
               <span className="rail-label">色号</span>
             </button>
@@ -608,7 +669,16 @@ export default function App() {
             </div>
           </div>
 
-          <aside className="side">
+          <aside className="side" style={{ width: sideW }}>
+            <div
+              className="side-resizer"
+              title="拖动调整面板宽度"
+              onPointerDown={onSideResizeDown}
+              onPointerMove={onSideResizeMove}
+              onPointerUp={onSideResizeUp}
+              onPointerCancel={onSideResizeUp}
+              onDoubleClick={() => setSideW(300)}
+            />
             <div className="side-tabs">
               <button className={'side-tab' + (tab === 'colors' ? ' active' : '')} onClick={() => setTab('colors')}>
                 <IconPalette /> 颜色
@@ -737,7 +807,9 @@ export default function App() {
       )}
       {dialog === 'export' && <ExportDialog onClose={() => setDialog(null)} />}
       {dialog === 'projects' && <ProjectsDialog onClose={() => setDialog(null)} />}
-      {dialog === 'colors' && <ColorManager onClose={() => setDialog(null)} />}
+      {dialog === 'colors' && (
+        <ColorManager onClose={() => setDialog(null)} initialTab={colorManagerTab} />
+      )}
       {dialog === 'keys' && (
         <ShortcutsDialog
           onClose={() => setDialog(null)}

@@ -1,7 +1,15 @@
+import { useMemo } from 'react';
 import { useEditor } from '../core/store';
 import type { ViewFlags } from '../core/types';
 import type { ThemeMode } from '../core/theme';
-import { PEGBOARD_MAX, PEGBOARD_PRESETS, boardCols, boardLabel, boardRows } from '../core/board';
+import {
+  PEGBOARD_MAX,
+  PEGBOARD_PRESETS,
+  boardCols,
+  boardLabel,
+  boardRows,
+  boardsOf,
+} from '../core/board';
 import { IconBoard, IconCode, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconMoon, IconRuler, IconSun } from './Icons';
 
 interface Props {
@@ -145,34 +153,37 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
       </div>
 
       {doc.pegboard > 0 && (
-        <div className="board-focus-row">
-          <div className="board-focus-info">
-            <b>
-              {boardCols(doc.width, doc.pegboard)} × {boardRows(doc.height, doc.pegboard)} ={' '}
-              {boardCols(doc.width, doc.pegboard) * boardRows(doc.height, doc.pegboard)} 块板
-            </b>
-            <span>
-              {focus
-                ? `正在拼 ${boardLabel(focus.col, focus.row)} 板，绘画被限制在这块板内`
-                : '双击画布上的任意一块板，可进入「只看这块板」'}
-            </span>
+        <>
+          <div className="board-focus-row">
+            <div className="board-focus-info">
+              <b>
+                {boardCols(doc.width, doc.pegboard)} × {boardRows(doc.height, doc.pegboard)} ={' '}
+                {boardCols(doc.width, doc.pegboard) * boardRows(doc.height, doc.pegboard)} 块板
+              </b>
+              <span>
+                {focus
+                  ? `正在拼 ${boardLabel(focus.col, focus.row)} 板，绘画被限制在这块板内`
+                  : '点下面的板号或双击画布任意一块板，可进入「只看这块板」'}
+              </span>
+            </div>
+            {focus ? (
+              <button className="btn sm" onClick={() => setFocus(null)}>
+                看全图
+              </button>
+            ) : (
+              <button
+                className="btn sm"
+                onClick={() => {
+                  const at = hover ?? { x: Math.floor(doc.width / 2), y: Math.floor(doc.height / 2) };
+                  focusOnCell(at.x, at.y);
+                }}
+              >
+                聚焦光标处
+              </button>
+            )}
           </div>
-          {focus ? (
-            <button className="btn sm" onClick={() => setFocus(null)}>
-              看全图
-            </button>
-          ) : (
-            <button
-              className="btn sm"
-              onClick={() => {
-                const at = hover ?? { x: Math.floor(doc.width / 2), y: Math.floor(doc.height / 2) };
-                focusOnCell(at.x, at.y);
-              }}
-            >
-              聚焦光标处
-            </button>
-          )}
-        </div>
+          <BoardPicker />
+        </>
       )}
 
       <div className="divider" />
@@ -187,6 +198,70 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
         onChange={(e) => setNotes(e.target.value)}
         style={{ fontSize: 12 }}
       />
+    </div>
+  );
+}
+
+/**
+ * 板号选择器：把所有实体板排成一张缩略图，点哪块就只看哪块。
+ * 之前只能「双击画布上的板」或「聚焦光标处」，板多了根本找不到想拼的那块，
+ * 所以这里按真实网格排出来，顺便用底色深浅标出每块板拼了多少。
+ */
+function BoardPicker() {
+  const doc = useEditor((s) => s.doc);
+  const focus = useEditor((s) => s.focus);
+  const setFocus = useEditor((s) => s.setFocus);
+
+  const boards = useMemo(
+    () => boardsOf(doc.width, doc.height, doc.pegboard),
+    [doc.width, doc.height, doc.pegboard],
+  );
+  const cols = boardCols(doc.width, doc.pegboard);
+
+  // 每块板的已拼比例：0 = 还没动，1 = 拼完了，给板号上色用
+  const ratios = useMemo(() => {
+    const out = new Map<number, number>();
+    for (const b of boards) {
+      let total = 0;
+      let done = 0;
+      for (let y = b.y; y < b.y + b.h; y++) {
+        for (let x = b.x; x < b.x + b.w; x++) {
+          const i = y * doc.width + x;
+          if (!doc.cells[i]) continue;
+          total++;
+          if (doc.progress[i] === 1) done++;
+        }
+      }
+      out.set(b.index, total ? done / total : 0);
+    }
+    return out;
+  }, [boards, doc.cells, doc.progress, doc.width]);
+
+  if (!boards.length) return null;
+
+  return (
+    <div className="board-picker-wrap">
+      <label className="board-picker-label">选一块板开始拼</label>
+      <div
+        className="board-picker"
+        style={{ gridTemplateColumns: `repeat(${Math.min(cols, 8)}, minmax(0, 1fr))` }}
+      >
+        {boards.map((b) => {
+          const r = ratios.get(b.index) ?? 0;
+          const on = !!focus && focus.col === b.col && focus.row === b.row;
+          return (
+            <button
+              key={b.index}
+              className={'board-cell' + (on ? ' on' : '') + (r >= 0.999 ? ' done' : '')}
+              onClick={() => setFocus(on ? null : { size: doc.pegboard, col: b.col, row: b.row })}
+              title={`${b.label} 板 · 已拼 ${Math.round(r * 100)}%`}
+            >
+              <i style={{ opacity: 0.12 + r * 0.85 } as React.CSSProperties} />
+              <span>{b.label}</span>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

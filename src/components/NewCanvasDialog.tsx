@@ -30,17 +30,25 @@ const SIZES = [
 export default function NewCanvasDialog({ onClose }: Props) {
   const newDocument = useEditor((s) => s.newDocument);
   const dirty = useEditor((s) => s.dirty);
-  const [w, setW] = useState(DEFAULT_CANVAS_SIZE);
-  const [h, setH] = useState(DEFAULT_CANVAS_SIZE);
+  // 输入框用字符串保存，允许中途清空（否则 0 删不掉）；失焦或创建时再收成数字
+  const [wText, setWText] = useState(String(DEFAULT_CANVAS_SIZE));
+  const [hText, setHText] = useState(String(DEFAULT_CANVAS_SIZE));
   const [square, setSquare] = useState(true);
   const [paletteKey, setPaletteKey] = useState<string>(DEFAULT_PALETTE_KEY);
   const [name, setName] = useState('');
 
-  const pair = clampCanvasPair(w, square ? w : h);
+  const toNum = (t: string) => {
+    const n = Number(t.trim());
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+  };
+  // 输入框允许空着（正在删数字），这时按默认值算，不打断输入
+  const wNum = toNum(wText) || DEFAULT_CANVAS_SIZE;
+  const hNum = square ? wNum : toNum(hText) || DEFAULT_CANVAS_SIZE;
+  const pair = clampCanvasPair(wNum, hNum);
   const cw = pair.w;
   const ch = pair.h;
   const tooBig = cw * ch > CANVAS_SOFT_CELLS;
-  const clamped = cw !== Math.round(w) || ch !== Math.round(h);
+  const clamped = cw !== wNum || ch !== hNum;
 
   const boards = useMemo(
     () => Math.ceil(cw / DEFAULT_PEGBOARD) * Math.ceil(ch / DEFAULT_PEGBOARD),
@@ -87,8 +95,8 @@ export default function NewCanvasDialog({ onClose }: Props) {
                   key={s.w}
                   className={'preset-btn' + (cw === s.w && ch === s.h ? ' active' : '')}
                   onClick={() => {
-                    setW(s.w);
-                    setH(s.h);
+                    setWText(String(s.w));
+                    setHText(String(s.h));
                   }}
                 >
                   <b>{s.label}</b>
@@ -106,13 +114,15 @@ export default function NewCanvasDialog({ onClose }: Props) {
                 type="number"
                 min={CANVAS_MIN}
                 max={CANVAS_MAX}
-                value={w}
+                value={wText}
                 onChange={(e) => {
-                  const v = Number(e.target.value) || 0;
-                  setW(v);
-                  if (square) setH(v);
+                  setWText(e.target.value);
                 }}
-                onBlur={() => setW(cw)}
+                onBlur={() => {
+                  const v = toNum(wText) || DEFAULT_CANVAS_SIZE;
+                  setWText(String(v));
+                  if (square) setHText(String(v));
+                }}
               />
             </div>
             <div className="field">
@@ -122,10 +132,10 @@ export default function NewCanvasDialog({ onClose }: Props) {
                 type="number"
                 min={CANVAS_MIN}
                 max={CANVAS_MAX}
-                value={square ? cw : h}
+                value={square ? String(cw) : hText}
                 disabled={square}
-                onChange={(e) => setH(Number(e.target.value) || 0)}
-                onBlur={() => setH(ch)}
+                onChange={(e) => setHText(e.target.value)}
+                onBlur={() => setHText(String(toNum(hText) || DEFAULT_CANVAS_SIZE))}
               />
             </div>
           </div>

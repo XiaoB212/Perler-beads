@@ -210,6 +210,7 @@
 
 /* 右侧面板 */
 .side {
+  position: relative;
   display: flex;
   flex-direction: column;
   width: 300px;
@@ -217,6 +218,32 @@
   background: var(--bg-elev);
   border-left: 1px solid var(--line);
   min-height: 0;
+}
+/* 左边缘拖拽条：想看清画布就把它拖窄，想看色板就拖宽 */
+.side-resizer {
+  position: absolute;
+  left: -3px;
+  top: 0;
+  bottom: 0;
+  width: 7px;
+  z-index: 12;
+  cursor: col-resize;
+  background: transparent;
+  touch-action: none;
+}
+.side-resizer::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: transparent;
+  transition: background 0.14s ease;
+}
+.side-resizer:hover::after,
+.side-resizer:active::after {
+  background: var(--accent);
 }
 .side-tabs {
   display: flex;

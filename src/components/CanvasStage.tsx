@@ -49,6 +49,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const setHover = useEditor((s) => s.setHover);
   const setColorIndex = useEditor((s) => s.setColorIndex);
   const notify = useEditor((s) => s.notify);
+  const requestFit = useEditor((s) => s.requestFit);
 
   const dragRef = useRef<{
     mode: DragMode;
@@ -108,28 +109,40 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
 
   const inBounds = (x: number, y: number) => x >= 0 && y >= 0 && x < doc.width && y < doc.height;
 
-  // 首次进入 / 切换图纸时，若画布超出可视区则自动适应窗口
+  // 自动铺满：容器尺寸变化 / 切换图纸时都重新算一次最合适的格宽。
+  // 之前只在「算出来比当前小」时才调整，于是把窗口拉大、或者换到小图时，
+  // 画布会一直缩在角落一小块 —— 用户要的是「自动扩大铺满这个区域」。
+  // 手动缩放过（滚轮 / 按钮）后就不再自动接管，避免抢用户的视角。
+  const manualZoomRef = useRef(false);
   const fittedRef = useRef<string>('');
   const sizeRef = useRef(size);
   sizeRef.current = size;
-  useEffect(() => {
+  const fitToStage = useCallback((grow: boolean) => {
     const { w, h } = sizeRef.current;
     if (!w || !h) return;
-    const key = `${doc.id}:${doc.width}x${doc.height}`;
-    if (fittedRef.current === key) return;
-    fittedRef.current = key;
+    const s = useEditor.getState();
     // 预留顶栏 chip 条与底部缩放条的高度
     const padX = w < 700 ? 24 : 72;
     const padY = h < 560 ? 96 : 72;
-    const fit = Math.min((w - padX) / doc.width, (h - padY) / doc.height);
-    const s = useEditor.getState();
-    if (fit < s.zoom) {
-      s.setZoom(Math.max(2, Math.min(40, fit)));
-      s.setPan({ x: 0, y: 0 });
+    const fit = Math.min((w - padX) / s.doc.width, (h - padY) / s.doc.height);
+    if (fit <= 0) return;
+    const next = Math.max(2, Math.min(48, fit));
+    if (!grow && next >= s.zoom) return;
+    s.setZoom(next);
+    s.setPan({ x: 0, y: 0 });
+  }, []);
+  useEffect(() => {
+    const key = `${doc.id}:${doc.width}x${doc.height}`;
+    if (key !== fittedRef.current) {
+      // 换图纸 = 回到自动模式
+      fittedRef.current = key;
+      manualZoomRef.current = false;
     }
+    if (manualZoomRef.current) return;
+    fitToStage(true);
     // 依赖里带上容器尺寸：移动端首次测量为 0 时这里会提前返回，
     // 必须等 ResizeObserver 给出真实尺寸后再算一次，否则手机上会裁掉图纸。
-  }, [doc.id, doc.width, doc.height, size.w, size.h]);
+  }, [doc.id, doc.width, doc.height, size.w, size.h, fitToStage]);
 
   // ===== 主画布绘制 =====
   useEffect(() => {
@@ -179,8 +192,8 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     const holeR = Math.max(0.9, cell * 0.14);
     const drawHoles = flags.beadHoles && cell >= 8;
     // 色号：格子在屏幕上够大才画得下，否则会糊成一团
-    const drawCodes = flags.showCodes && cell >= 17;
-    const codeCells: { x: number; y: number; code: string; hex: string }[] = [];
+    const drawCodes = flags.showCodes && cell >= 12;
+    const codeCells: { x: number; y: number; code: string; hex: string; dim: boolean }[] = [];
     const emptyEven = new Path2D();
     const emptyOdd = new Path2D();
     for (let y = vy0; y <= vy1; y++) {
@@ -209,7 +222,8 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
           holes.moveTo(hx + holeR, hy);
           holes.arc(hx, hy, holeR, 0, Math.PI * 2);
         }
-        if (drawCodes && !dim) codeCells.push({ x: px, y: py, code: c.code, hex: c.hex });
+        // 褪色（未拼）的格子也要给色号，否则用户看不出这里该放什么豆
+        if (drawCodes) codeCells.push({ x: px, y: py, code: c.code, hex: c.hex, dim });
         if (placed && flags.progressMode) {
           checks.moveTo(px + cell * 0.22, py + cell * 0.52);
           checks.lineTo(px + cell * 0.42, py + cell * 0.74);
@@ -241,11 +255,21 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     if (drawCodes && codeCells.length) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = `600 ${Math.round(Math.min(cell * 0.42, 13))}px ui-monospace, monospace`;
+      ctx.font = `700 ${Math.round(Math.min(cell * 0.46, 14))}px ui-monospace, monospace`;
+      ctx.lineJoin = 'round';
       for (const cc of codeCells) {
-        ctx.fillStyle = readableTextColor(cc.hex);
-        ctx.fillText(cc.code, cc.x + cell / 2, cc.y + cell * (drawHoles ? 0.72 : 0.52));
+        // 有中孔时色号压在下半个豆子上，避免被孔挡住
+        const ty = cc.y + cell * (drawHoles ? 0.72 : 0.52);
+        const fg = readableTextColor(cc.hex);
+        // 深色字配浅描边、浅色字配深描边，中灰的豆子上也读得清
+        ctx.strokeStyle = fg === '#12141d' ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.5)';
+        ctx.lineWidth = Math.max(1.6, cell * 0.1);
+        ctx.globalAlpha = cc.dim ? 0.75 : 1;
+        ctx.strokeText(cc.code, cc.x + cell / 2, ty);
+        ctx.fillStyle = fg;
+        ctx.fillText(cc.code, cc.x + cell / 2, ty);
       }
+      ctx.globalAlpha = 1;
     }
     if (flags.progressMode) {
       ctx.strokeStyle = C.check;
@@ -678,30 +702,71 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     dragRef.current = null;
   };
 
-  const onWheel = (e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.ctrlKey || e.metaKey || e.altKey) {
+  /** 以画布上某一点为锚点缩放：锚点下的格子保持不动 */
+  const zoomAt = useCallback(
+    (clientX: number, clientY: number, factor: number) => {
       const rect = canvasRef.current!.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
+      const mx = clientX - rect.left;
+      const my = clientY - rect.top;
       const boardX = (mx - originX) / cell;
       const boardY = (my - originY) / cell;
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
       const next = Math.max(2, Math.min(48, cell * factor));
+      if (next === cell) return;
+      manualZoomRef.current = true;
       setZoom(next);
       const boardW = doc.width * next;
       const boardH = doc.height * next;
-      // 精确保持指针下的格子不动
       const newOriginX = mx - boardX * next;
       const newOriginY = my - boardY * next;
       setPan({
         x: newOriginX - (size.w - boardW) / 2,
         y: newOriginY - (size.h - boardH) / 2,
       });
-    } else {
-      setPan({ x: pan.x - e.deltaX, y: pan.y - e.deltaY });
+    },
+    [originX, originY, cell, doc.width, doc.height, size.w, size.h, setZoom, setPan],
+  );
+
+  /** 以画布中心为锚点缩放（缩放条按钮 / 快捷键用，不跑偏） */
+  const centerZoom = useCallback(
+    (factor: number) => {
+      const rect = canvasRef.current?.getBoundingClientRect();
+      const cx = rect ? rect.left + rect.width / 2 : 0;
+      const cy = rect ? rect.top + rect.height / 2 : 0;
+      zoomAt(cx, cy, factor);
+    },
+    [zoomAt],
+  );
+
+  const onWheel = (e: WheelEvent) => {
+    // 和 Figma / Excalidraw 一致的手感：
+    //   滚轮或触控板两指 = 上下左右平移（能「随意拖动、上下滑动」）
+    //   Ctrl / ⌘ / Alt + 滚轮、触控板捏合 = 以指针为锚点缩放
+    // 之前的版本反着来（滚轮直接缩放），想挪一下画面反而很难。
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      zoomAt(e.clientX, e.clientY, factor);
+      return;
     }
+    // Shift + 滚轮 = 只横向平移（笔记本只有竖滚时很有用）
+    const dx = e.shiftKey ? -(e.deltaY || e.deltaX) : -e.deltaX;
+    const dy = e.shiftKey ? 0 : -e.deltaY;
+    if (!dx && !dy) return;
+    setPan({ x: pan.x + dx, y: pan.y + dy });
   };
+  // React 的 onWheel 是 passive 的，里面 preventDefault 会被浏览器警告并忽略，
+  // 所以自己挂一个 { passive: false } 的原生监听，才能阻止页面跟着滚动。
+  const wheelRef = useRef(onWheel);
+  wheelRef.current = onWheel;
+  useEffect(() => {
+    const el = wrapRef.current;
+    if (!el) return;
+    const fn = (e: WheelEvent) => {
+      e.preventDefault();
+      wheelRef.current(e);
+    };
+    el.addEventListener('wheel', fn, { passive: false });
+    return () => el.removeEventListener('wheel', fn);
+  }, []);
 
   // 空格平移
   useEffect(() => {
@@ -726,11 +791,10 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const fitRequest = useEditor((s) => s.fitRequest);
   useEffect(() => {
     if (!fitRequest || !size.w || !size.h) return;
-    const s = useEditor.getState();
-    const z = Math.min((size.w - 80) / doc.width, (size.h - 80) / doc.height);
-    s.setZoom(Math.max(2, Math.min(40, z)));
-    s.setPan({ x: 0, y: 0 });
-  }, [fitRequest, size.w, size.h, doc.width, doc.height]);
+    // 手动按「适应窗口」= 明确要求回到自动模式，之后跟着容器走
+    manualZoomRef.current = false;
+    fitToStage(true);
+  }, [fitRequest, size.w, size.h, fitToStage]);
 
   // 键盘光标移出可视区时自动把画布挪过来，否则用方向键会「画到看不见的地方」。
   // 只在 cursorTick 变化（键盘移动）时触发，鼠标悬停不能把画布拖走。
@@ -774,7 +838,6 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
           setHover(null);
           endDrag();
         }}
-        onWheel={onWheel}
         onDoubleClick={(e) => {
           // 双击某块板 = 进入 / 退出「只看这块板」，比分板设置里点按钮快得多
           if (doc.pegboard <= 0) return;
@@ -793,13 +856,13 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         </button>
       )}
       <div className="stage-zoombar">
-        <button className="zbtn" onClick={() => setZoom(cell / 1.25)} title="缩小">
+        <button className="zbtn" onClick={() => centerZoom(1 / 1.25)} title="缩小">
           <svg width="14" height="14" viewBox="0 0 14 14">
             <path d="M3 7h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
         </button>
         <span className="zoomval">{zoomPct}%</span>
-        <button className="zbtn" onClick={() => setZoom(cell * 1.25)} title="放大">
+        <button className="zbtn" onClick={() => centerZoom(1.25)} title="放大">
           <svg width="14" height="14" viewBox="0 0 14 14">
             <path d="M7 3v8M3 7h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
           </svg>
@@ -808,12 +871,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         <button
           className="zbtn"
           title="适应窗口"
-          onClick={() => {
-            const s = useEditor.getState();
-            const z = Math.min((size.w - 80) / doc.width, (size.h - 80) / doc.height);
-            s.setZoom(Math.max(2, Math.min(40, z)));
-            s.setPan({ x: 0, y: 0 });
-          }}
+          onClick={() => requestFit()}
         >
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
             <path d="M2 5V2h3M12 5V2H9M2 9v3h3M12 9v3H9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />

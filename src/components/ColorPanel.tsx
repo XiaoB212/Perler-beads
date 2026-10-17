@@ -4,7 +4,8 @@ import { BRAND_LABEL, PALETTE_KEYS, palettePreset, resolvePaletteKey } from '../
 import { IconPalette, IconPlus, IconSearch, IconSettings, IconTrash } from './Icons';
 
 interface Props {
-  onOpenManager: () => void;
+  /** tab 省略 = 打开「本图纸色板」，'preset' = 直接到品牌色板换整套色卡 */
+  onOpenManager: (tab?: 'doc' | 'preset' | 'io') => void;
 }
 
 /** 色卡切换按钮上的短名，全名太长会挤爆一行 */
@@ -131,7 +132,7 @@ export default function ColorPanel({ onOpenManager }: Props) {
           >
             已用 {usage.size}
           </button>
-          <button className="icon-btn" onClick={onOpenManager} title="色号管理">
+          <button className="icon-btn" onClick={() => onOpenManager()} title="色号管理">
             <IconSettings width={14} height={14} />
           </button>
         </div>
@@ -146,7 +147,7 @@ export default function ColorPanel({ onOpenManager }: Props) {
             </b>
             <span>{cur.hex.toUpperCase()}</span>
           </div>
-          <button className="icon-btn" onClick={onOpenManager} title="管理色号">
+          <button className="icon-btn" onClick={() => onOpenManager()} title="管理色号">
             <IconPalette width={15} height={15} />
           </button>
         </div>
@@ -157,7 +158,7 @@ export default function ColorPanel({ onOpenManager }: Props) {
           <IconSearch />
           <input placeholder="搜索色号 / 色名 / HEX" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
-        <button className="btn sm" onClick={onOpenManager} title="新增自定义色号">
+        <button className="btn sm" onClick={() => onOpenManager()} title="新增自定义色号">
           <IconPlus width={13} height={13} />
         </button>
       </div>
@@ -199,7 +200,7 @@ export default function ColorPanel({ onOpenManager }: Props) {
           <div className="hint-box" style={{ gridColumn: '1 / -1' }}>
             没有匹配的颜色
             <br />
-            <button className="btn sm" style={{ marginTop: 8 }} onClick={onOpenManager}>
+            <button className="btn sm" style={{ marginTop: 8 }} onClick={() => onOpenManager()}>
               <IconTrash width={12} height={12} /> 前往色号管理
             </button>
           </div>

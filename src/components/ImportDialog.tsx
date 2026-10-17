@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../core/store';
 import { DEFAULT_QUANTIZE, quantizeImage, sampleImage } from '../core/quantize';
-import { palettePreset } from '../core/palette';
+import { BUILTIN_PALETTES, BRAND_LABEL, PALETTE_KEYS, palettePreset } from '../core/palette';
 import type { BeadColor } from '../core/types';
 import { IconCheck, IconClose, IconImage, IconUpload, IconWand } from './Icons';
 import { renderPatternCanvas } from '../core/export';
@@ -32,7 +32,6 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const [busy, setBusy] = useState(false);
 
   const [width, setWidth] = useState(48);
-  const [maxColors, setMaxColors] = useState(20);
   const [dither, setDither] = useState(0.5);
   const [sample, setSample] = useState<Sample>('average');
   const [brightness, setBrightness] = useState(1);
@@ -42,7 +41,8 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const [whiteThreshold, setWhiteThreshold] = useState(242);
   // 默认用品牌全色板（色阶充足，渐变过渡自然）；当前图纸色板通常只有几种颜色，留给用户主动选
   const [useDocPalette, setUseDocPalette] = useState(false);
-  const [brandKey, setBrandKey] = useState('mard');
+  // 直接用完整 key，避免再靠 ALIASES 把 'mard' 映射成 'mard291'
+  const [brandKey, setBrandKey] = useState('mard291');
 
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -65,7 +65,7 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
         ...DEFAULT_QUANTIZE,
         width,
         height,
-        maxColors: Math.min(maxColors, palette.length),
+        maxColors: palette.length,
         dither,
         sample,
         brightness,
@@ -83,7 +83,6 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     width,
     height,
     sample,
-    maxColors,
     dither,
     brightness,
     contrast,
@@ -278,21 +277,6 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                 </div>
 
                 <div className="field">
-                  <label>颜色数量上限</label>
-                  <div className="slider-row">
-                    <input
-                      type="range"
-                      min={2}
-                      max={64}
-                      value={maxColors}
-                      onChange={(e) => setMaxColors(Number(e.target.value))}
-                    />
-                    <span className="val">{maxColors}</span>
-                  </div>
-                  <span className="hint">颜色越少越好拼，一般 12~24 色足够</span>
-                </div>
-
-                <div className="field">
                   <label>抖动（仿色）强度</label>
                   <div className="slider-row">
                     <input
@@ -396,19 +380,36 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                     >
                       当前图纸色板 · {doc.palette.length} 色
                     </button>
-                    {!useDocPalette &&
-                      ['mard', 'artkal', 'perler', 'hama', 'basic'].map((k) => (
-                        <button
-                          key={k}
-                          className={'btn sm ' + (brandKey === k ? 'primary' : '')}
-                          onClick={() => setBrandKey(k)}
-                        >
-                          {k.toUpperCase()}
-                        </button>
-                      ))}
-                    <button className="btn sm" onClick={() => setUseDocPalette(false)}>
+                    <button
+                      className={'btn sm ' + (!useDocPalette ? 'primary' : '')}
+                      onClick={() => setUseDocPalette(false)}
+                    >
                       品牌色板
                     </button>
+                  </div>
+                  {/* 品牌色板一律列全 10 套，不随「当前图纸色板」隐藏——
+                      之前选到图纸色板后整排品牌按钮就消失了，看着像点不开。 */}
+                  <select
+                    className="input"
+                    style={{ marginTop: 8 }}
+                    value={brandKey}
+                    onChange={(e) => {
+                      setBrandKey(e.target.value);
+                      setUseDocPalette(false);
+                    }}
+                    title="选一套品牌色卡来匹配这张图，导入后还能在「色号管理」里继续改"
+                  >
+                    {PALETTE_KEYS.map((k) => (
+                      <option key={k} value={k}>
+                        {BRAND_LABEL[k] ?? k} · {BUILTIN_PALETTES[k]?.length ?? 0} 色
+                      </option>
+                    ))}
+                  </select>
+                  <div className="hint" style={{ marginTop: 6 }}>
+                    {useDocPalette
+                      ? `用当前图纸里的 ${doc.palette.length} 种颜色匹配，导入后色号与现场一致`
+                      : `用 ${BRAND_LABEL[brandKey] ?? brandKey} 的全套 ${palette.length} 色匹配，渐变过渡更自然`}
+                    ；导入后仍可在「色号管理」里换色卡或逐个改色号。
                   </div>
                 </div>
               </div>

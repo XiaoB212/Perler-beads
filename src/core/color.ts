@@ -129,14 +129,15 @@ export function nearestInPalette(lab: LAB, pl: PaletteLab): number {
   return best;
 }
 
-/** 相对亮度，用于决定文字用黑还是白 */
+/** 相对亮度 0–1，用于决定文字用黑还是白 */
 export function luminance(hex: string): number {
   const { r, g, b } = hexToRgb(hex);
-  return (0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b)) / 255;
+  // srgbToLinear 已经把 0–255 归一到 0–1，这里返回的就是 0–1 的相对亮度
+  return 0.2126 * srgbToLinear(r) + 0.7152 * srgbToLinear(g) + 0.0722 * srgbToLinear(b);
 }
 
 export function readableTextColor(hex: string): string {
-  return luminance(hex) > 0.55 ? '#12141d' : '#ffffff';
+  return luminance(hex) > 0.42 ? '#12141d' : '#ffffff';
 }
 
 /** 颜色明度/饱和/色相调整（以 HSL 方式），用于转换前预处理 */

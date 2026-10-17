@@ -32,7 +32,8 @@ logs/
 src/**/*.tmpdir/
 
 # local automation: test scripts, screenshots, research notes
-scripts/
+scripts/*
+!scripts/gen-palettes.mjs
 .shots/
 .research/
 

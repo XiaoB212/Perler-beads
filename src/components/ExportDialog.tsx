@@ -4,6 +4,8 @@ import {
   BOARD_PRESETS,
   DEFAULT_PDF,
   DEFAULT_RENDER,
+  DEFAULT_WATERMARK_TEXT,
+  DEFAULT_WATERMARK_URL,
   exportCSV,
   exportPDF,
   exportPNG,
@@ -38,7 +40,8 @@ export default function ExportDialog({ onClose }: Props) {
   const [grid, setGrid] = useState(true);
   const [coords, setCoords] = useState(true);
   const [holes, setHoles] = useState(true);
-  const [showCodes, setShowCodes] = useState(false);
+  // 导出默认就带色号：用户之前拿到一张没有色号的图，根本没法照着拼
+  const [showCodes, setShowCodes] = useState(true);
   const [background, setBackground] = useState(true);
   const [transparent, setTransparent] = useState(false);
 
@@ -49,6 +52,12 @@ export default function ExportDialog({ onClose }: Props) {
   const [withLegend, setWithLegend] = useState(false);
   const [calibration, setCalibration] = useState(true);
   const [boardSize, setBoardSize] = useState(0);
+  // 导出件上的色号用量表与水印
+  const [legend, setLegend] = useState(true);
+  const [watermark, setWatermark] = useState(true);
+  const [watermarkText, setWatermarkText] = useState(DEFAULT_WATERMARK_TEXT);
+  const [watermarkUrl, setWatermarkUrl] = useState(DEFAULT_WATERMARK_URL);
+  const [fitWindow, setFitWindow] = useState(true);
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -65,8 +74,28 @@ export default function ExportDialog({ onClose }: Props) {
       title: doc.name,
       boardSize,
       boardGap: 1.2,
+      legend,
+      watermark,
+      watermarkText,
+      watermarkUrl,
+      fitWindow,
     }),
-    [cellSize, grid, coords, holes, showCodes, transparent, background, doc.name, boardSize],
+    [
+      cellSize,
+      grid,
+      coords,
+      holes,
+      showCodes,
+      transparent,
+      background,
+      doc.name,
+      boardSize,
+      legend,
+      watermark,
+      watermarkText,
+      watermarkUrl,
+      fitWindow,
+    ],
   );
 
   const pdfOpts: PdfOptions = useMemo(
@@ -338,6 +367,52 @@ export default function ExportDialog({ onClose }: Props) {
                 </>
               )}
 
+              {(fmt === 'png' || fmt === 'svg' || fmt === 'pdf') && (
+                <>
+                  <div className="check-row" onClick={() => setLegend((v) => !v)}>
+                    <span className={'checkbox' + (legend ? ' on' : '')}>
+                      <IconCheck width={11} height={11} />
+                    </span>
+                    附色号用量表（每个色号用多少颗）
+                  </div>
+                  {fmt === 'svg' && (
+                    <div className="check-row" onClick={() => setFitWindow((v) => !v)}>
+                      <span className={'checkbox' + (fitWindow ? ' on' : '')}>
+                        <IconCheck width={11} height={11} />
+                      </span>
+                      打开时自适应窗口大小
+                    </div>
+                  )}
+                  <div className="check-row" onClick={() => setWatermark((v) => !v)}>
+                    <span className={'checkbox' + (watermark ? ' on' : '')}>
+                      <IconCheck width={11} height={11} />
+                    </span>
+                    加导出水印
+                  </div>
+                  {watermark && (
+                    <div className="field">
+                      <label>水印文字</label>
+                      <input
+                        className="input"
+                        value={watermarkText}
+                        placeholder="例如：本图纸由 XXX 制作"
+                        onChange={(e) => setWatermarkText(e.target.value)}
+                      />
+                      <label style={{ marginTop: 6 }}>
+                        水印地址（{fmt === 'pdf' ? 'PDF 里可以直接点开' : '会写在文字旁边'}）
+                      </label>
+                      <input
+                        className="input"
+                        value={watermarkUrl}
+                        placeholder="https://"
+                        onChange={(e) => setWatermarkUrl(e.target.value)}
+                      />
+                      <span className="hint">留空则不写地址；想署名自己就改上面的文字</span>
+                    </div>
+                  )}
+                </>
+              )}
+
               {fmt === 'pdf' && (
                 <>
                   <div className="field">
@@ -431,7 +506,7 @@ export default function ExportDialog({ onClose }: Props) {
                     <span className={'checkbox' + (withLegend ? ' on' : '')}>
                       <IconCheck width={11} height={11} />
                     </span>
-                    附加用量清单页
+                    再附一页完整用量清单
                   </div>
                 </>
               )}

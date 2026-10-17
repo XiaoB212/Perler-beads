@@ -19,9 +19,11 @@ import {
 
 interface Props {
   onClose: () => void;
+  /** 打开时停在哪个 tab：从「换色卡」进来直接到品牌色板 */
+  initialTab?: 'doc' | 'preset' | 'io';
 }
 
-export default function ColorManager({ onClose }: Props) {
+export default function ColorManager({ onClose, initialTab = 'doc' }: Props) {
   const doc = useEditor((s) => s.doc);
   const addCustomColor = useEditor((s) => s.addCustomColor);
   const updateColor = useEditor((s) => s.updateColor);
@@ -32,7 +34,7 @@ export default function ColorManager({ onClose }: Props) {
   const notify = useEditor((s) => s.notify);
 
   const [q, setQ] = useState('');
-  const [tab, setTab] = useState<'doc' | 'preset' | 'io'>('doc');
+  const [tab, setTab] = useState<'doc' | 'preset' | 'io'>(initialTab);
 
   // —— 导入 / 导出 ——
   const fileRef = useRef<HTMLInputElement>(null);
@@ -195,6 +197,12 @@ export default function ColorManager({ onClose }: Props) {
                 <button className="btn sm primary" onClick={addNew}>
                   <IconPlus width={13} height={13} /> 新增色号
                 </button>
+                <button className="btn sm" onClick={() => setTab('preset')} title="整块换成别的品牌色卡">
+                  换色卡
+                </button>
+              </div>
+              <div className="hint" style={{ marginBottom: 10 }}>
+                色号 / 色名 / 品牌点一下就能直接改，改完立刻生效，随时都能改——不是导入时定死的。
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                 {list.map(({ c, i }) => (
@@ -289,9 +297,7 @@ export default function ColorManager({ onClose }: Props) {
                       style={{ padding: '10px 12px' }}
                     >
                       <div className="rc-body">
-                        <b>
-                          {BRAND_LABEL[key]} · {p.length} 色
-                        </b>
+                        <b>{BRAND_LABEL[key]}</b>
                         <span style={{ display: 'flex', gap: 2, marginTop: 5 }}>
                           {p
                             .filter((_, i) => i % Math.ceil(p.length / 24) === 0)

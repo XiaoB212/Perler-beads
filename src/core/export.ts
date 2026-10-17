@@ -18,7 +18,21 @@ export interface RenderOptions {
   boardSize?: number;
   /** 板与板之间的空隙，单位是「格宽」 */
   boardGap?: number;
+  /** 按进度上色：已拼的按真实颜色画，未拼的淡化，导出时一眼看出拼到哪 */
+  progressStyle?: 'none' | 'placed';
+  /** 在图下方附一条色号用量表（色块 + 色号 + 颗数） */
+  legend?: boolean;
+  /** 底部水印，默认带项目名与地址 */
+  watermark?: boolean;
+  watermarkText?: string;
+  watermarkUrl?: string;
+  /** SVG 打开时铺满窗口并居中显示 */
+  fitWindow?: boolean;
 }
+
+/** 默认水印文案与地址，导出面板里可以改 */
+export const DEFAULT_WATERMARK_TEXT = '本图纸由 XiaoB212 的 Perler-beads 生成';
+export const DEFAULT_WATERMARK_URL = 'https://xiaob212.github.io/Perler-beads/';
 
 export const DEFAULT_RENDER: RenderOptions = {
   cellSize: 24,
@@ -30,7 +44,41 @@ export const DEFAULT_RENDER: RenderOptions = {
   dimUnplaced: false,
   boardSize: 0,
   boardGap: 1.2,
+  legend: true,
+  watermark: true,
+  watermarkText: DEFAULT_WATERMARK_TEXT,
+  watermarkUrl: DEFAULT_WATERMARK_URL,
+  fitWindow: true,
 };
+
+/** 色号用量：按颗数从多到少排，跳过色板里没用到的项 */
+export function usageRows(doc: PatternDoc): { color: BeadColor; count: number }[] {
+  const map = new Map<number, number>();
+  for (let i = 0; i < doc.cells.length; i++) {
+    const v = doc.cells[i];
+    if (!v) continue;
+    map.set(v, (map.get(v) ?? 0) + 1);
+  }
+  return [...map.entries()]
+    .map(([v, count]) => ({ color: doc.palette[v - 1], count }))
+    .filter((r) => r.color)
+    .sort((a, b) => b.count - a.count);
+}
+
+/** 用量表排版：按可用宽度决定列数，返回列宽、行高与总高（单位与传入一致） */
+function legendMetrics(rows: number, availW: number, scale = 1) {
+  const minCol = 132 * scale;
+  const cols = Math.max(1, Math.min(6, Math.floor(availW / minCol)));
+  const colW = availW / Math.max(1, cols);
+  const rowH = 27 * scale;
+  const headH = rows > 0 ? 30 * scale : 0;
+  return { cols, colW, rowH, headH, height: headH + Math.ceil(rows / cols) * rowH + 10 * scale };
+}
+
+/** 水印占用的高度 */
+function watermarkHeight(scale = 1) {
+  return 24 * scale;
+}
 
 /** 市面常见拼豆板尺寸（5mm 豆） */
 export const BOARD_PRESETS: { value: number; label: string }[] = [
@@ -79,10 +127,10 @@ function inkFor(hex: string): string {
   return readableTextColor(hex);
 }
 
-/** 主渲染：把图纸画到 canvas */
+/** 主渲染：把图纸画到 canvas（可选底部用量表与水印） */
 export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLCanvasElement {
   const { width, height, cells, palette } = doc;
-  // 允许小于 1px 的格宽：5000 格画布的缩略图只能靠亚像素缩小才画得下
+  // 允许小于 1px 的格宽：超大画布的缩略图只能靠亚像素缩小才画得下
   const cs = Math.max(0.35, opts.cellSize);
   const bs = opts.boardSize ?? 0;
   const gap = opts.boardGap ?? 1.2;
@@ -92,14 +140,27 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
   const padTop = opts.coords ? Math.max(18, cs * 1.1) : 6;
   const padLeft = opts.coords ? Math.max(20, cs * 1.2) : 6;
   const pad = 8;
-  const w = padLeft + spanW * cs + pad;
-  const h = padTop + spanH * cs + pad;
+  const gridW = spanW * cs;
+  const gridH = spanH * cs;
+  // 左右、上下留白对称，图纸落在画面正中间，不贴左上角
+  const padRight = Math.max(pad, padLeft);
+  const padBottom = Math.max(pad, padTop);
+  const bodyW = padLeft + gridW + padRight;
+
+  // 缩略图尺寸下（cs < 6）用量表会挤成一团，直接不画
+  const detailed = cs >= 6;
+  const rows = opts.legend && detailed ? usageRows(doc) : [];
+  const legendScale = Math.max(0.55, Math.min(1.35, cs / 18));
+  const leg = opts.legend && detailed ? legendMetrics(rows.length, bodyW - pad * 2, legendScale) : null;
+  const wmH = opts.watermark && detailed ? watermarkHeight(legendScale) : 0;
+
+  const w = bodyW;
+  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + wmH;
+
   const canvas = document.createElement('canvas');
-  const dpr = 1;
-  canvas.width = Math.round(w * dpr);
-  canvas.height = Math.round(h * dpr);
+  canvas.width = Math.max(1, Math.round(w));
+  canvas.height = Math.max(1, Math.round(h));
   const ctx = canvas.getContext('2d')!;
-  ctx.scale(dpr, dpr);
   if (opts.background) {
     ctx.fillStyle = opts.background;
     ctx.fillRect(0, 0, w, h);
@@ -108,17 +169,23 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
   }
 
   // 格子底色
+  const progressMode = opts.progressStyle === 'placed';
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const v = cells[y * width + x];
+      const idx = y * width + x;
+      const v = cells[idx];
       if (!v) continue;
       const c = palette[v - 1];
       if (!c) continue;
       const px = padLeft + lay.x[x] * cs;
       const py = padTop + lay.y[y] * cs;
+      // 未拼的按 22% 透明度画，已拼的保持原色，扫一眼就知道拼到哪
+      const done = !progressMode || doc.progress[idx] === 1;
+      ctx.globalAlpha = done ? 1 : 0.22;
       ctx.fillStyle = c.hex;
       ctx.fillRect(px, py, cs, cs);
-      if (opts.holes && cs >= 9) {
+      ctx.globalAlpha = 1;
+      if (opts.holes && cs >= 9 && !(opts.showCodes && cs >= 12)) {
         ctx.beginPath();
         ctx.arc(px + cs / 2, py + cs / 2, Math.max(0.8, cs * 0.13), 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255,255,255,0.62)';
@@ -127,12 +194,21 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
         ctx.lineWidth = Math.max(0.4, cs * 0.03);
         ctx.stroke();
       }
-      if (opts.showCodes && cs >= 22) {
-        ctx.fillStyle = inkFor(c.hex);
-        ctx.font = `600 ${Math.round(cs * 0.3)}px ui-monospace, monospace`;
+      if (opts.showCodes && cs >= 12 && done) {
+        const fs = Math.min(cs * 0.44, 14);
+        ctx.font = `700 ${Math.round(fs)}px ui-monospace, monospace`;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(c.code, px + cs / 2, py + cs * 0.82);
+        const cx = px + cs / 2;
+        const cy = py + cs * 0.5;
+        // 色号直接印在豆子颜色上，不垫底色块，图纸才干净
+        const fg = readableTextColor(c.hex);
+        ctx.lineJoin = 'round';
+        ctx.lineWidth = Math.max(1.4, cs * 0.1);
+        ctx.strokeStyle = fg === '#12141d' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.45)';
+        ctx.strokeText(c.code, cx, cy);
+        ctx.fillStyle = fg;
+        ctx.fillText(c.code, cx, cy);
       }
     }
   }
@@ -145,12 +221,12 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     for (let x = 0; x < spanW; x++) {
       const px = padLeft + x * cs;
       ctx.moveTo(px, padTop);
-      ctx.lineTo(px, padTop + spanH * cs);
+      ctx.lineTo(px, padTop + gridH);
     }
     for (let y = 0; y < spanH; y++) {
       const py = padTop + y * cs;
       ctx.moveTo(padLeft, py);
-      ctx.lineTo(padLeft + spanW * cs, py);
+      ctx.lineTo(padLeft + gridW, py);
     }
     ctx.stroke();
   }
@@ -213,6 +289,72 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     }
   }
 
+  // 用量表：色块里写色号 + 颗数
+  let cursorY = padTop + gridH + pad;
+  if (leg && rows.length) {
+    const total = rows.reduce((s, r) => s + r.count, 0);
+    const s = legendScale;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.font = `600 ${Math.round(13 * s)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+    ctx.fillText('色号用量', pad, cursorY + 12 * s);
+    ctx.font = `500 ${Math.round(11 * s)}px ui-monospace, monospace`;
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.textAlign = 'right';
+    ctx.fillText(`${rows.length} 色 · ${total} 颗`, w - pad, cursorY + 12 * s);
+    cursorY += leg.headH;
+
+    rows.forEach(({ color, count }, i) => {
+      const col = i % leg.cols;
+      const line = Math.floor(i / leg.cols);
+      const x = pad + col * leg.colW;
+      const y = cursorY + line * leg.rowH;
+      // 色块要够大，色号才印得清
+      const sw = 34 * s;
+      const sh = 20 * s;
+      ctx.fillStyle = color.hex;
+      ctx.fillRect(x, y, sw, sh);
+      ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+      ctx.lineWidth = 0.8;
+      ctx.strokeRect(x + 0.4, y + 0.4, sw - 0.8, sh - 0.8);
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // 色号亮度自适应：浅色豆子用深字，深色豆子用白字
+      ctx.fillStyle = inkFor(color.hex);
+      ctx.font = `700 ${Math.round(11 * s)}px ui-monospace, monospace`;
+      ctx.fillText(color.code, x + sw / 2, y + sh / 2 + 0.4);
+      ctx.textAlign = 'left';
+      ctx.fillStyle = 'rgba(0,0,0,0.7)';
+      ctx.font = `600 ${Math.round(13 * s)}px ui-monospace, monospace`;
+      ctx.fillText(`${count}`, x + sw + 6 * s, y + sh / 2 + 0.4);
+    });
+    cursorY += Math.ceil(rows.length / leg.cols) * leg.rowH + 8 * s;
+  }
+
+  // 水印：项目名 + 可点击地址
+  if (opts.watermark && detailed) {
+    const s = legendScale;
+    const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
+    const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(pad, cursorY + 2);
+    ctx.lineTo(w - pad, cursorY + 2);
+    ctx.stroke();
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.font = `400 ${Math.round(8.4 * s)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+    ctx.fillText(text, pad, cursorY + wmH * 0.62);
+    ctx.textAlign = 'right';
+    ctx.fillStyle = 'rgba(0,0,0,0.42)';
+    ctx.font = `400 ${Math.round(8 * s)}px ui-monospace, monospace`;
+    ctx.fillText(url.replace(/^https?:\/\//, ''), w - pad, cursorY + wmH * 0.62);
+  }
+
+  // 用量表 / 水印区域在缩略图尺寸下会被压得看不清，干脆不画
   return canvas;
 }
 
@@ -251,33 +393,61 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
   const padTop = opts.coords ? 22 : 8;
   const padLeft = opts.coords ? 26 : 8;
   const pad = 8;
-  const w = padLeft + spanW * cs + pad;
-  const h = padTop + spanH * cs + pad;
+  // 四边留白对称，图纸落在正中间
+  const padRight = Math.max(pad, padLeft);
+  const padBottom = Math.max(pad, padTop);
+  const bodyW = padLeft + spanW * cs + padRight;
+  const gridH = spanH * cs;
+
+  // 用量表与水印
+  const rows = opts.legend ? usageRows(doc) : [];
+  const s = Math.max(0.8, Math.min(1.6, cs / 18));
+  const leg = opts.legend ? legendMetrics(rows.length, bodyW - pad * 2, s) : null;
+  const wmH = opts.watermark ? watermarkHeight(s) : 0;
+
+  const w = bodyW;
+  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + wmH;
   const out: string[] = [];
   out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
-  out.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="ui-monospace, Menlo, monospace">`,
-  );
+  // fitWindow：直接用百分比宽高，浏览器打开就按窗口铺满并居中，不再贴在左上角
+  if (opts.fitWindow) {
+    out.push(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="100%" height="100%" viewBox="0 0 ${w} ${h}" preserveAspectRatio="xMidYMid meet" font-family="ui-monospace, Menlo, monospace">`,
+    );
+    out.push(
+      `<style>html,body{margin:0;height:100%;background:#fff}svg{display:block}</style>`,
+    );
+  } else {
+    out.push(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}" font-family="ui-monospace, Menlo, monospace">`,
+    );
+  }
   out.push(`<title>${escapeXml(opts.title || doc.name)}</title>`);
   if (opts.background) out.push(`<rect width="${w}" height="${h}" fill="${opts.background}"/>`);
   out.push(`<g id="cells">`);
+  const progressModeSvg = opts.progressStyle === 'placed';
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
-      const v = cells[y * width + x];
+      const idx = y * width + x;
+      const v = cells[idx];
       if (!v) continue;
       const c = palette[v - 1];
       if (!c) continue;
       const px = padLeft + lay.x[x] * cs;
       const py = padTop + lay.y[y] * cs;
-      out.push(`<rect x="${px}" y="${py}" width="${cs}" height="${cs}" fill="${c.hex}"/>`);
-      if (opts.holes && cs >= 8) {
+      // 按进度上色：已拼保持原色，未拼淡化
+      const done = !progressModeSvg || doc.progress[idx] === 1;
+      const op = done ? '' : ' fill-opacity="0.22"';
+      out.push(`<rect x="${px}" y="${py}" width="${cs}" height="${cs}" fill="${c.hex}"${op}/>`);
+      if (opts.holes && cs >= 8 && !(opts.showCodes && cs >= 12)) {
         out.push(
-          `<circle cx="${px + cs / 2}" cy="${py + cs / 2}" r="${(cs * 0.13).toFixed(2)}" fill="#ffffff" fill-opacity="0.62"/>`,
+          `<circle cx="${px + cs / 2}" cy="${py + cs / 2}" r="${(cs * 0.13).toFixed(2)}" fill="#ffffff" fill-opacity="${done ? 0.62 : 0.14}"/>`,
         );
       }
-      if (opts.showCodes && cs >= 20) {
+      if (opts.showCodes && cs >= 12 && done) {
+        // 色号直接印在豆子上，不垫底块；深色豆子用浅字、浅色豆子用深字
         out.push(
-          `<text x="${px + cs / 2}" y="${py + cs * 0.82}" text-anchor="middle" font-size="${Math.round(cs * 0.3)}" fill="${inkFor(c.hex)}">${escapeXml(c.code)}</text>`,
+          `<text x="${px + cs / 2}" y="${py + cs / 2 + cs * 0.16}" text-anchor="middle" font-size="${Math.min(cs * 0.44, 14).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="${inkFor(c.hex)}" stroke="${inkFor(c.hex) === '#ffffff' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.8)'}" stroke-width="${Math.max(1, cs * 0.06).toFixed(2)}" paint-order="stroke" stroke-linejoin="round">${escapeXml(c.code)}</text>`,
         );
       }
     }
@@ -334,6 +504,57 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
         `<text x="${padLeft - 4}" y="${padTop + lay.y[y] * cs + cs / 2 + 4}" text-anchor="end">${y + 1}</text>`,
       );
     }
+    out.push(`</g>`);
+  }
+  // 用量表：色块里直接写色号 + 颗数
+  let cursorY = padTop + gridH + padBottom;
+  if (leg && rows.length) {
+    const total = rows.reduce((acc, r) => acc + r.count, 0);
+    out.push(`<g id="legend">`);
+    out.push(
+      `<text x="${pad}" y="${cursorY + 12 * s}" font-size="${13 * s}" font-weight="600" fill="rgba(0,0,0,0.82)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">色号用量</text>`,
+    );
+    out.push(
+      `<text x="${w - pad}" y="${cursorY + 12 * s}" font-size="${11 * s}" fill="rgba(0,0,0,0.5)" text-anchor="end">${rows.length} 色 · ${total} 颗</text>`,
+    );
+    cursorY += leg.headH;
+    rows.forEach(({ color, count }, i) => {
+      const col = i % leg.cols;
+      const line = Math.floor(i / leg.cols);
+      const x = pad + col * leg.colW;
+      const y = cursorY + line * leg.rowH;
+      // 色块放大到能印清色号
+      const sw = 34 * s;
+      const sh = 20 * s;
+      out.push(
+        `<rect x="${x}" y="${y}" width="${sw}" height="${sh}" fill="${color.hex}" stroke="rgba(0,0,0,0.2)" stroke-width="0.8"/>`,
+      );
+      // 色号写在色块里，字色按亮度反转
+      out.push(
+        `<text x="${x + sw / 2}" y="${y + sh / 2 + 4 * s}" font-size="${11 * s}" font-weight="700" font-family="ui-monospace,monospace" fill="${inkFor(color.hex)}" text-anchor="middle">${escapeXml(color.code)}</text>`,
+      );
+      out.push(
+        `<text x="${x + sw + 6 * s}" y="${y + sh / 2 + 4 * s}" font-size="${13 * s}" font-weight="600" font-family="ui-monospace,monospace" fill="rgba(0,0,0,0.7)">${count}</text>`,
+      );
+    });
+    out.push(`</g>`);
+    cursorY += Math.ceil(rows.length / leg.cols) * leg.rowH + 8 * s;
+  }
+  // 水印：项目名 + 可点击地址
+  if (opts.watermark) {
+    const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
+    const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+    out.push(`<g id="watermark">`);
+    out.push(
+      `<line x1="${pad}" y1="${cursorY + 2}" x2="${w - pad}" y2="${cursorY + 2}" stroke="rgba(0,0,0,0.12)" stroke-width="0.7"/>`,
+    );
+    out.push(
+      `<text x="${pad}" y="${cursorY + wmH * 0.68}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.5)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}</text>`,
+    );
+    // 用 <a> 包住地址，SVG 在浏览器里打开可以直接点
+    out.push(
+      `<a href="${escapeXml(url)}" target="_blank" rel="noopener"><text x="${w - pad}" y="${cursorY + wmH * 0.68}" font-size="${8 * s}" fill="rgba(0,0,0,0.42)" text-anchor="end" text-decoration="underline">${escapeXml(url.replace(/^https?:\/\//, ''))}</text></a>`,
+    );
     out.push(`</g>`);
   }
   out.push(`</svg>`);
@@ -398,14 +619,14 @@ function pdfTextSafe(
   xMm: number,
   yMm: number,
   opts: { sizeMm: number; bold?: boolean; color?: [number, number, number]; align?: 'left' | 'right' | 'center' },
-) {
+): number {
   const { sizeMm, bold = false, color = [24, 24, 32], align = 'left' } = opts;
   if (!/[^\x00-\x7f]/.test(text)) {
     pdf.setFont('helvetica', bold ? 'bold' : 'normal');
     pdf.setFontSize(sizeMm * 2.8346);
     pdf.setTextColor(color[0], color[1], color[2]);
     pdf.text(text, xMm, yMm, { align });
-    return;
+    return pdf.getTextWidth(text);
   }
   // 1mm ≈ 6px，保证打印清晰
   const px = 6;
@@ -431,6 +652,8 @@ function pdfTextSafe(
   if (align === 'right') x = xMm - wMm;
   else if (align === 'center') x = xMm - wMm / 2;
   pdf.addImage(cv.toDataURL('image/png'), 'PNG', x, yMm - hMm * 0.78, wMm, hMm);
+  // 返回实际占位宽度（不含右侧留白），调用方可以紧跟着排下一段文字
+  return tw / px;
 }
 
 /** 在 PDF 上按分板布局画整张图纸（含板框与板号） */
@@ -454,15 +677,36 @@ function pdfDrawPattern(
   const ox = lay.x[x0] ?? 0;
   const oy = lay.y[y0] ?? 0;
 
+  const progressModePdf = opts.progressStyle === 'placed';
   for (let y = y0; y < y1; y++) {
     for (let x = x0; x < x1; x++) {
-      const v = doc.cells[y * doc.width + x];
+      const idx = y * doc.width + x;
+      const v = doc.cells[idx];
       if (!v) continue;
       const c = doc.palette[v - 1];
       if (!c) continue;
       const { r, g, b } = hexRgb(c.hex);
+      const px = gridX + (lay.x[x] - ox) * cell;
+      const py = gridY + (lay.y[y] - oy) * cell;
+      const done = !progressModePdf || doc.progress[idx] === 1;
       pdf.setFillColor(r, g, b);
-      pdf.rect(gridX + (lay.x[x] - ox) * cell, gridY + (lay.y[y] - oy) * cell, cell, cell, 'F');
+      pdf.rect(px, py, cell, cell, 'F');
+      if (!done) {
+        // 未拼的盖一层白纱，打印出来明显比已拼的淡
+        pdf.setFillColor(255, 255, 255);
+        pdf.setGState(new (pdf as any).GState({ opacity: 0.72 }));
+        pdf.rect(px, py, cell, cell, 'F');
+        pdf.setGState(new (pdf as any).GState({ opacity: 1 }));
+      }
+      if (opts.showCodes && cell >= 3.6 && done) {
+        // 色号直接印在豆子上，不垫白底块
+        const fs = Math.min(cell * 0.46, 3.4);
+        pdf.setFont('helvetica', 'bold');
+        pdf.setFontSize(fs * 2.83);
+        const ink = readableTextColor(c.hex);
+        pdf.setTextColor(ink === '#12141d' ? 27 : 255, ink === '#12141d' ? 29 : 255, ink === '#12141d' ? 33 : 255);
+        pdf.text(c.code, px + cell / 2, py + cell / 2 + fs * 0.34, { align: 'center' });
+      }
     }
   }
 
@@ -558,6 +802,25 @@ function pdfFooter(pdf: jsPDF, opts: PdfOptions, pw: number, ph: number, margin:
       color: [90, 90, 105],
     });
   }
+  // 水印：一行文字 + 可点击的项目地址（PDF 阅读器里点地址会打开浏览器）
+  if (opts.watermark) {
+    const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
+    const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+    const wmY = opts.calibration ? footY - 5.4 : footY;
+    // 先量一下这段中文有多宽，再把可点击的地址紧接在后面，避免两段文字叠在一起
+    const textW = pdfTextSafe(pdf, text, margin, wmY, { sizeMm: 2.4, color: [120, 120, 136] });
+    const linkX = margin + textW + 2;
+    pdf.setFont('helvetica', 'normal');
+    pdf.setFontSize(6.4);
+    pdf.setTextColor(96, 132, 196);
+    const short = url.replace(/^https?:\/\//, '');
+    // textWithLink 让导出的 PDF 里这行字可以直接点开
+    pdf.textWithLink(short, linkX, wmY, { url, align: 'left' });
+    pdf.setDrawColor(150, 175, 215);
+    pdf.setLineWidth(0.15);
+    const tw = pdf.getTextWidth(short);
+    pdf.line(linkX, wmY + 0.5, linkX + tw, wmY + 0.5);
+  }
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(6.5);
   pdf.setTextColor(150, 150, 165);
@@ -594,6 +857,7 @@ function pdfSingleGeometry(
   margin: number,
   spanW: number,
   spanH: number,
+  legendH = 0,
 ): PdfPageGeometry {
   let top = margin;
   if (opts.withHeader) top += 13;
@@ -601,12 +865,64 @@ function pdfSingleGeometry(
   const coordTop = opts.coords ? 3.6 : 0.6;
   const bottom = opts.calibration ? 13 : 6;
   const availW = pw - margin * 2 - coordPad;
-  const availH = ph - top - margin - bottom - coordTop;
+  const availH = ph - top - margin - bottom - coordTop - legendH;
   const cell = Math.max(0.4, Math.min(availW / spanW, availH / spanH));
-  // 垂直居中：短边方向不贴着页头，避免下半页大片空白
+  // 两个方向都居中：图纸铺在纸张正中间，不贴着页头或左边
   const leftover = Math.max(0, availH - spanH * cell);
+  const leftoverX = Math.max(0, availW - spanW * cell);
   const gridY = top + coordTop + leftover / 2;
-  return { pw, ph, margin, top, coordPad, coordTop, bottom, cell, gridX: margin + coordPad, gridY };
+  const gridX = margin + coordPad + leftoverX / 2;
+  return { pw, ph, margin, top, coordPad, coordTop, bottom, cell, gridX, gridY };
+}
+
+/** 单页用量表排版（单位 mm） */
+function pdfLegendMetrics(rows: number, availW: number) {
+  // 颗数紧跟色块后，一列只需要「色块 + 3 位数」的宽度，可以排得更密
+  const cols = Math.max(1, Math.min(6, Math.floor(availW / 46)));
+  const colW = availW / cols;
+  const rowH = 5.4;
+  const headH = rows > 0 ? 7 : 0;
+  return { cols, colW, rowH, headH, height: headH + Math.ceil(rows / cols) * rowH };
+}
+
+/** 在 PDF 同一页里画色号用量表（每色一颗数），返回占用高度 */
+function pdfDrawLegend(pdf: jsPDF, doc: PatternDoc, x: number, y: number, availW: number): number {
+  const rows = usageRows(doc);
+  if (!rows.length) return 0;
+  const total = rows.reduce((s, r) => s + r.count, 0);
+  const m = pdfLegendMetrics(rows.length, availW);
+  pdfTextSafe(pdf, '色号用量', x, y + 5, { sizeMm: 4, bold: true, color: [40, 40, 52] });
+  pdf.setFont('helvetica', 'normal');
+  pdf.setFontSize(7);
+  pdf.setTextColor(120, 120, 136);
+  pdf.text(`${rows.length} 色 · ${total} 颗`, x + availW, y + 5, { align: 'right' });
+
+  rows.forEach(({ color, count }, i) => {
+    const col = i % m.cols;
+    const line = Math.floor(i / m.cols);
+    const cx = x + col * m.colW;
+    const cy = y + m.headH + line * m.rowH + 0.5;
+    const { r, g, b } = hexRgb(color.hex);
+    // 色号直接写在色块里，够大才看得清
+    const sw = 12;
+    const sh = 4.4;
+    pdf.setFillColor(r, g, b);
+    pdf.setDrawColor(170, 170, 182);
+    pdf.setLineWidth(0.15);
+    pdf.rect(cx, cy, sw, sh, 'FD');
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(9);
+    const ink = readableTextColor(color.hex);
+    const [ir, ig, ib] = ink === '#12141d' ? [27, 29, 33] : [255, 255, 255];
+    pdf.setTextColor(ir, ig, ib);
+    pdf.text(color.code, cx + sw / 2, cy + sh / 2 + 1.05, { align: 'center' });
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(9);
+    pdf.setTextColor(50, 50, 64);
+    // 颗数紧跟在色块右边，不要右对齐到列宽末尾——那样中间会空出一大段
+    pdf.text(`${count}`, cx + sw + 2.6, cy + sh / 2 + 1.05, { align: 'left' });
+  });
+  return m.height;
 }
 
 /** 一张纸装下整张图纸：标题 + 坐标 + 板框 + 校准标尺 */
@@ -628,8 +944,22 @@ function pdfSinglePage(pdf: jsPDF, doc: PatternDoc, opts: PdfOptions, pw: number
     );
   }
 
-  const g = pdfSingleGeometry(doc, opts, pw, ph, margin, lay.spanX, lay.spanY);
+  const g = pdfSingleGeometry(
+    doc,
+    opts,
+    pw,
+    ph,
+    margin,
+    lay.spanX,
+    lay.spanY,
+    opts.legend ? pdfLegendMetrics(usageRows(doc).length, pw - margin * 2).height + 3 : 0,
+  );
   pdfDrawPattern(pdf, doc, opts, g.cell, g.gridX, g.gridY, lay);
+  // 色号用量表贴在图纸下方，同一页里看得见每色用了多少颗
+  if (opts.legend) {
+    const legendY = Math.min(ph - margin - g.bottom - 20, g.gridY + lay.spanY * g.cell + 5);
+    pdfDrawLegend(pdf, doc, margin, legendY, pw - margin * 2);
+  }
   pdfFooter(pdf, opts, pw, ph, margin);
 }
 
@@ -692,20 +1022,25 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   let gridXmm: number;
   let gridYmm: number;
   let cellMm: number;
+  // 预览里用量表与水印由页面层单独画（和 exportPDF 一样），图案绘制本身不画它们
+  const patOnly = { ...opts, legend: false, watermark: false };
+  let legendSpanMm = 0;
 
   if (opts.layout === 'single') {
     const bs = opts.boardSize ?? 0;
     const lay = boardLayout(doc, bs, opts.boardGap ?? 1.2);
-    const g = pdfSingleGeometry(doc, opts, pw, ph, margin, lay.spanX, lay.spanY);
+    const legendH = opts.legend ? pdfLegendMetrics(usageRows(doc).length, pw - margin * 2).height + 3 : 0;
+    const g = pdfSingleGeometry(doc, opts, pw, ph, margin, lay.spanX, lay.spanY, legendH);
     const boardInfo = bs > 0 ? ` · ${lay.cols}×${lay.rows} 块 ${bs}×${bs} 板` : '';
     drawHeader(
       doc.name || 'Perler Pattern',
       `${doc.width} × ${doc.height} 格 · ${totalBeads(doc)} 颗 · ${doc.palette.length} 色${boardInfo}`,
     );
-    pattern = renderPatternCanvas(doc, { ...opts, cellSize: Math.max(1, M(g.cell)), background: null });
+    pattern = renderPatternCanvas(doc, { ...patOnly, cellSize: Math.max(1, M(g.cell)), background: null });
     gridXmm = g.gridX;
     gridYmm = g.gridY;
     cellMm = g.cell;
+    legendSpanMm = lay.spanY * g.cell;
   } else if (opts.layout === 'boards') {
     const bs = Math.max(4, opts.boardSize || doc.pegboard || 29);
     const lay = boardLayout(doc, bs, 0);
@@ -730,7 +1065,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     cellMm = Math.max(0.4, Math.min((pw - margin * 2 - coordPad) / bs, (ph - top - margin - bottom - coordTop) / bs));
     gridXmm = margin + coordPad;
     gridYmm = top + coordTop;
-    pattern = renderPatternCanvas(part, { ...opts, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
+    pattern = renderPatternCanvas(part, { ...patOnly, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
   } else {
     const chunk = Math.max(8, Math.min(60, opts.maxCellsPerPage));
     const cols = Math.ceil(doc.width / chunk);
@@ -761,7 +1096,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     );
     gridXmm = margin + coordPad;
     gridYmm = top + coordTop;
-    pattern = renderPatternCanvas(part, { ...opts, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
+    pattern = renderPatternCanvas(part, { ...patOnly, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
   }
 
   // 图纸：renderPatternCanvas 自带坐标留白，按同样留白对齐到页面网格原点
@@ -769,6 +1104,51 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   const padLeft = opts.coords ? Math.max(20, cellPx * 1.2) : 6;
   const padTop = opts.coords ? Math.max(18, cellPx * 1.1) : 6;
   ctx.drawImage(pattern, M(gridXmm) - padLeft, M(gridYmm) - padTop);
+
+  // 单页预览：用量表贴在图纸下方
+  if (opts.layout === 'single' && opts.legend) {
+    const rows = usageRows(doc);
+    if (rows.length) {
+      const total = rows.reduce((acc, r) => acc + r.count, 0);
+      const m = pdfLegendMetrics(rows.length, pw - margin * 2);
+      const ly = Math.min(ph - margin - 20, gridYmm + legendSpanMm + 5);
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'alphabetic';
+      ctx.fillStyle = '#282834';
+      ctx.font = `600 ${Math.round(M(3.1) * 1.28)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+      ctx.fillText('色号用量', M(margin), M(ly + 4));
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#787888';
+      ctx.font = `400 ${Math.round(M(2.6) * 1.28)}px ui-monospace, monospace`;
+      ctx.fillText(`${rows.length} 色 · ${total} 颗`, M(pw - margin), M(ly + 4));
+      ctx.textAlign = 'left';
+      rows.forEach(({ color, count }, i) => {
+        const col = i % m.cols;
+        const line = Math.floor(i / m.cols);
+        const cx = margin + col * m.colW;
+        const cy = ly + m.headH + line * m.rowH;
+        const sw = M(3.2);
+        ctx.fillStyle = color.hex;
+        ctx.fillRect(M(cx), M(cy), sw, sw);
+        ctx.strokeStyle = 'rgba(0,0,0,0.16)';
+        ctx.lineWidth = 0.6;
+        ctx.strokeRect(M(cx) + 0.3, M(cy) + 0.3, sw - 0.6, sw - 0.6);
+        ctx.fillStyle = '#1e1e2a';
+        const fs = Math.max(9, Math.round(M(2.4) * 1.3));
+        ctx.font = `600 ${fs}px ui-monospace, monospace`;
+        ctx.fillText(color.code, M(cx + 4.4), M(cy + 2.4));
+        const cw2 = ctx.measureText(color.code).width;
+        ctx.fillStyle = '#828292';
+        ctx.font = `400 ${Math.max(8, Math.round(M(2.1) * 1.3))}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+        ctx.fillText(color.name, M(cx + 4.4) + cw2 + M(1.4), M(cy + 2.4));
+        ctx.textAlign = 'right';
+        ctx.fillStyle = '#3c3c4c';
+        ctx.font = `400 ${Math.max(9, Math.round(M(2.3) * 1.3))}px ui-monospace, monospace`;
+        ctx.fillText(String(count), M(cx + m.colW - 16), M(cy + 2.4));
+        ctx.textAlign = 'left';
+      });
+    }
+  }
 
   // 页脚：50mm 校准尺 + 提示
   const footY = M(ph - margin + 1);
@@ -796,6 +1176,31 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   ctx.textAlign = 'right';
   ctx.font = `400 ${Math.round(M(2.3))}px ui-monospace, monospace`;
   ctx.fillText('Perler Studio', M(pw - margin), footY + M(0.6));
+
+  // 水印：预览里同样画出来，导出与预览保持一致
+  if (opts.watermark) {
+    const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
+    const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+    const wmY = opts.calibration ? footY - M(5.4) : footY;
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#787888';
+    ctx.font = `400 ${Math.round(M(2.4) * 1.3)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+    ctx.fillText(text, M(margin), wmY);
+    const tw = ctx.measureText(text).width;
+    ctx.fillStyle = '#6084c4';
+    ctx.font = `400 ${Math.round(M(2.3) * 1.3)}px ui-monospace, monospace`;
+    const x2 = M(margin) + tw + M(4);
+    const short = url.replace(/^https?:\/\//, '');
+    ctx.fillText(short, x2, wmY);
+    const uw = ctx.measureText(short).width;
+    ctx.strokeStyle = '#96afd7';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x2, wmY + 1.2);
+    ctx.lineTo(x2 + uw, wmY + 1.2);
+    ctx.stroke();
+    ctx.textAlign = 'left';
+  }
 
   return canvas;
 }
@@ -843,8 +1248,9 @@ function pdfBoardPages(pdf: jsPDF, doc: PatternDoc, opts: PdfOptions, pw: number
       // 关键：cell 一律按「完整一块板」算，边缘残缺板不放大，
       // 否则每页格子大小不同，打印后拼装对不上。
       const cell = Math.max(0.4, Math.min(availW / bs, availH / bs));
-      const gridX = margin + coordPad;
-      const gridY = top + coordTop;
+      // 板居中铺在纸上，不贴左上角
+      const gridX = margin + coordPad + Math.max(0, (availW - bs * cell) / 2);
+      const gridY = top + coordTop + Math.max(0, (availH - bs * cell) / 2);
 
       // 只画这块板：把整图坐标裁剪到板范围
       pdfDrawPattern(pdf, doc, { ...opts, boardSize: 0 }, cell, gridX, gridY, lay, {
@@ -927,8 +1333,9 @@ export function exportPDF(doc: PatternDoc, opts: PdfOptions) {
         const availW = pw - margin * 2;
         const availH = ph - top - margin;
         const cell = Math.min(availW / (cw + 1.6), availH / (chh + 1.6));
-        const gridX = margin + cell * 1.6;
-        const gridY = top;
+        // 分块也居中，避免每页都贴在左上角
+        const gridX = margin + Math.max(0, (availW - cw * cell) / 2);
+        const gridY = top + Math.max(0, (availH - chh * cell) / 2);
 
         for (let y = y0; y < y1; y++) {
           for (let x = x0; x < x1; x++) {
