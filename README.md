@@ -4,6 +4,8 @@
 
 打开就能用，**不用登录、不用联网，所有图纸只存在你自己的浏览器里**。
 
+在线地址：<https://xiaob212.github.io/Perler-beads/>
+
 ![主界面](docs/img/02-overview.png)
 
 ---
@@ -271,12 +273,15 @@ npm run typecheck  # 只跑类型检查
    git push -u origin main
    ```
 
-2. 打开仓库 **Settings → Pages**，把 **Source** 设成 **GitHub Actions**。
+2. 打开仓库 **Settings → Pages**，把 **Source** 设成 **Deploy from a branch**，分支选 `gh-pages`、目录选 `/ (root)`。
+   （workflow 第一次跑完后才会出现 `gh-pages` 分支。若想省这一步，也可以在第一次跑 workflow 前先手动建一个空的 `gh-pages` 分支。）
 
 3. 等 Actions 跑完（约 1 分钟），访问 `https://<你的用户名>.github.io/<仓库名>/`。
 
+之后每次 push 到 `main`，workflow 会重新构建并把 `dist/` 推到 `gh-pages` 分支，Pages 自动更新。
+
 `vite.config.ts` 里 `base: './'` 用的是相对路径，放在仓库子路径下也能正常加载。
-workflow 会把 `index.html` 复制成 `404.html`，直接访问深链接也不会 404。
+workflow 会把 `index.html` 复制成 `404.html` 并加上 `.nojekyll`，直接访问深链接也不会 404。
 
 想部署到自己的服务器：把 `dist/` 整个目录丢到任意静态服务器即可。
 
