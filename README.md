@@ -17,6 +17,7 @@
 - 60 步撤销重做，`Ctrl/⌘+Z`、`Ctrl/⌘+Shift+Z`
 - 滚轮平移、`Ctrl/⌘+滚轮` 以指针为中心缩放、`空格` 拖动画布
 - 网格、坐标标尺、豆孔、拼豆板分界线、未拼变暗，全部可开关
+- 300×300（9 万格）大画布也流畅：绘制按颜色合批、只重绘视口内的格子
 
 ### 以图生图
 - 拖一张图片进窗口即可开始
@@ -78,15 +79,11 @@ npm run typecheck  # 只跑类型检查
 
 ## 部署到 GitHub Pages
 
-仓库已经带了 workflow（`.github/workflows/deploy.yml`），推上去就能用：
+仓库已经带了 workflow（`.github/workflows/deploy.yml`），推上去就能用。本地已经 `git init` 并提交好，只差一个远端：
 
-1. 新建一个 GitHub 仓库，把本项目推上去（分支 `main`）：
+1. 在 GitHub 新建一个空仓库（不要勾 README / .gitignore），然后：
 
    ```bash
-   git init
-   git add .
-   git commit -m "feat: 拼豆工作室"
-   git branch -M main
    git remote add origin https://github.com/<你的用户名>/<仓库名>.git
    git push -u origin main
    ```
