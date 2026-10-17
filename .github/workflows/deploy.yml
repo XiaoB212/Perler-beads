@@ -37,7 +37,11 @@ jobs:
       - name: SPA fallback
         run: cp dist/index.html dist/404.html
 
-      - uses: actions/configure-pages@v5
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          # 仓库第一次部署时 Pages 还没启用，让 action 自己调 API 打开它
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
