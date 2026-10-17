@@ -59,6 +59,9 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const setColorIndex = useEditor((s) => s.setColorIndex);
   const notify = useEditor((s) => s.notify);
   const requestFit = useEditor((s) => s.requestFit);
+const checkColor = useEditor((s) => s.checkColor);
+  const wrongMarks = useEditor((s) => s.wrongMarks);
+  const soloColor = useEditor((s) => s.soloColor);
 
   const dragRef = useRef<{
     mode: DragMode;
@@ -94,13 +97,20 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   }, []);
 
   const cell = zoom;
+  // 平移原点吸附到「设备像素」而不是整数 CSS 像素。
+  // 居中的基准点 (size-board)/2 经常落在 x.5，直接 Math.round 会让整张图
+  // 在两个设备像素之间来回跳，细网格线看起来就是一直在抖（用户 m06835 的反馈）。
+  const snapOrigin = (v: number) => {
+    const d = Math.min(2, window.devicePixelRatio || 1);
+    return Math.round(v * d) / d;
+  };
   const originX = useMemo(() => {
     const boardW = doc.width * cell;
-    return Math.round((size.w - boardW) / 2 + pan.x);
+    return snapOrigin((size.w - boardW) / 2 + pan.x);
   }, [size.w, doc.width, cell, pan.x]);
   const originY = useMemo(() => {
     const boardH = doc.height * cell;
-    return Math.round((size.h - boardH) / 2 + pan.y);
+    return snapOrigin((size.h - boardH) / 2 + pan.y);
   }, [size.h, doc.height, cell, pan.y]);
 
   const cellFromEvent = useCallback(
@@ -219,10 +229,18 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     // 按颜色归批：同色格子合成一条 path，一次 fill，避免每格都切 fillStyle。
     // 豆子孔与对勾也各自合成一条 path，只画一次。
     const dimMode = flags.progressMode && flags.dimUnplaced;
+    // 单色模式：只对某一个色号动手，其余颜色压暗
+    const solo = soloColor;
     const byColor = new Map<string, Path2D>();
     const byColorDim = new Map<string, Path2D>();
     const holes = new Path2D();
     const checks = new Path2D();
+    // 对色拼装：点错的格子上盖一个红叉
+    const wrongs = new Path2D();
+    const checkActive = flags.progressMode && flags.progressCheck && checkColor >= 0;
+    // 当前正在拼的色号，用它给同色格子加一圈提示，线上照着拼时一眼看清该放哪
+    const targetV = checkActive ? checkColor + 1 : solo !== null ? solo + 1 : 0;
+    const targets = new Path2D();
     const holeR = Math.max(0.9, cell * 0.14);
     const drawHoles = flags.beadHoles && cell >= 8;
     // 色号：格子在屏幕上够大才画得下，否则会糊成一团
@@ -255,7 +273,8 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         const c = doc.palette[v - 1];
         if (!c) continue;
         const placed = doc.progress[y * doc.width + x] === 1;
-        const dim = dimMode && !placed;
+        // 单色模式：只拼一个色号，其它颜色压暗，省得在一堆豆子里找
+        const dim = (dimMode && !placed) || (solo !== null && v - 1 !== solo);
         const bucket = dim ? byColorDim : byColor;
         let p = bucket.get(c.hex);
         if (!p) {
@@ -275,6 +294,27 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
           checks.moveTo(px + cell * 0.22, py + cell * 0.52);
           checks.lineTo(px + cell * 0.42, py + cell * 0.74);
           checks.lineTo(px + cell * 0.8, py + cell * 0.26);
+        }
+        if (flags.progressMode && wrongMarks.has(y * doc.width + x)) {
+          wrongs.moveTo(px + cell * 0.24, py + cell * 0.24);
+          wrongs.lineTo(px + cell * 0.76, py + cell * 0.76);
+          wrongs.moveTo(px + cell * 0.76, py + cell * 0.24);
+          wrongs.lineTo(px + cell * 0.24, py + cell * 0.76);
+        }
+        if (targetV && v === targetV && !placed) {
+          // 双层路径 + evenodd 填充 = 一圈描边环，不遮住豆子本身的颜色
+          const m = Math.max(1, cell * 0.1);
+          const cx = px + cell / 2;
+          const cy = py + cell / 2;
+          if (roundCell) {
+            targets.moveTo(cx + beadR - m, cy);
+            targets.arc(cx, cy, Math.max(1, beadR - m), 0, Math.PI * 2);
+            targets.moveTo(cx + beadR - 3 * m, cy);
+            targets.arc(cx, cy, Math.max(0.5, beadR - 3 * m), 0, Math.PI * 2);
+          } else {
+            targets.rect(px + m, py + m, cell - 2 * m, cell - 2 * m);
+            targets.rect(px + 3 * m, py + 3 * m, Math.max(1, cell - 6 * m), Math.max(1, cell - 6 * m));
+          }
         }
       }
     }
@@ -320,9 +360,23 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
       ctx.globalAlpha = 1;
     }
     if (flags.progressMode) {
+      // 正在拼的色号先高亮，再画已完成的对号
+      if (targetV && cell >= 5) {
+        ctx.fillStyle = C.accent;
+        ctx.globalAlpha = 0.55;
+        ctx.fill(targets, 'evenodd');
+        ctx.globalAlpha = 1;
+      }
       ctx.strokeStyle = C.check;
       ctx.lineWidth = Math.max(1.2, cell * 0.09);
       ctx.stroke(checks);
+      if (wrongMarks.size && cell >= 6) {
+        ctx.strokeStyle = C.wrong;
+        ctx.lineWidth = Math.max(1.6, cell * 0.11);
+        ctx.lineCap = 'round';
+        ctx.stroke(wrongs);
+        ctx.lineCap = 'butt';
+      }
     }
     ctx.restore();
 
@@ -503,7 +557,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         }
       }
     }
-  }, [doc, size, cell, originX, originY, flags, C, theme, focus]);
+  }, [doc, size, cell, originX, originY, flags, C, theme, focus, checkColor, wrongMarks, soloColor]);
 
   // ===== 覆盖层（光标 / 形状预览） =====
   useEffect(() => {
@@ -775,15 +829,22 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     }
 
     const { x, y } = cellFromEvent(e);
-    if (!hover || hover.x !== x || hover.y !== y) setHover(inBounds(x, y) ? { x, y } : null);
     const drag = dragRef.current;
+    // 平移时不用更新悬停格：光标是抓手，而且每移动一次就写一次 store
+    // 会让整个界面跟着重渲染，平板/触控板上就会顿成「抖动」。
+    if (drag?.mode !== 'pan' && (!hover || hover.x !== x || hover.y !== y)) {
+      setHover(inBounds(x, y) ? { x, y } : null);
+    }
     if (!drag) return;
     if (drag.mode === 'pan') {
+      // 这里拿到的是「这一次移动了多远」的增量，必须累加到当前 pan 上。
+      // 之前写成 startPan + 增量：每动一下都从起点重新算，画布就在原位附近来回跳，
+      // 看起来就是一直抖 —— 这就是「平移抖动」的根因。
       const dx = e.clientX - drag.lastX;
       const dy = e.clientY - drag.lastY;
       drag.lastX = e.clientX;
       drag.lastY = e.clientY;
-      setPan({ x: drag.startPan.x + dx, y: drag.startPan.y + dy });
+      if (dx || dy) panBy(dx, dy);
       return;
     }
     if (drag.mode === 'shape') {
@@ -929,8 +990,13 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   // 键盘光标移出可视区时自动把画布挪过来，否则用方向键会「画到看不见的地方」。
   // 只在 cursorTick 变化（键盘移动）时触发，鼠标悬停不能把画布拖走。
   const cursorTick = useEditor((s) => s.cursorTick);
+  const lastFollowTick = useRef(0);
   useEffect(() => {
-    if (!cursorTick || !hover || !size.w || !size.h) return;
+    // 只在「真的按了方向键」时跟随。之前依赖里有 originX/originY，
+    // 平移完这个 effect 会再跑一次，把光标重新顶到边缘 → 再平移 → 来回抖。
+    if (!cursorTick || cursorTick === lastFollowTick.current) return;
+    lastFollowTick.current = cursorTick;
+    if (!hover || !size.w || !size.h) return;
     const margin = 48;
     const cx = originX + hover.x * cell + cell / 2;
     const cy = originY + hover.y * cell + cell / 2;

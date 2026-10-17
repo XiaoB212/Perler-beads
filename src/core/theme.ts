@@ -73,6 +73,10 @@ export interface StageColors {
   gridStrong: string;
   hole: string;
   check: string;
+  /** 对色拼装：正在拼的色号高亮环 */
+  accent: string;
+  /** 对色拼装：点错的红叉 */
+  wrong: string;
   ruler: string;
   rulerBg: string;
   pegboard: string;
@@ -92,6 +96,8 @@ export function stageColors(theme: ResolvedTheme): StageColors {
       gridStrong: 'rgba(20,24,30,0.22)',
       hole: 'rgba(20,24,30,0.13)',
       check: 'rgba(255,255,255,0.95)',
+      accent: 'rgba(22,124,214,0.9)',
+      wrong: 'rgba(226,54,74,0.95)',
       ruler: '#8b9099',
       rulerBg: 'rgba(255,255,255,0.9)',
       pegboard: 'rgba(20,24,30,0.34)',
@@ -109,6 +115,8 @@ export function stageColors(theme: ResolvedTheme): StageColors {
     gridStrong: 'rgba(255,255,255,0.22)',
     hole: 'rgba(0,0,0,0.42)',
     check: 'rgba(255,255,255,0.92)',
+    accent: 'rgba(77,178,255,0.9)',
+    wrong: 'rgba(255,92,110,0.95)',
     ruler: '#6b7280',
     rulerBg: 'rgba(14,16,19,0.9)',
     pegboard: 'rgba(255,255,255,0.38)',

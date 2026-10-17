@@ -12,6 +12,9 @@ export default function UsagePanel() {
   const toggleFlag = useEditor((s) => s.toggleFlag);
   const flags = useEditor((s) => s.flags);
   const updateColor = useEditor((s) => s.updateColor);
+  const soloColor = useEditor((s) => s.soloColor);
+  const setSoloColor = useEditor((s) => s.setSoloColor);
+  const markColorPlaced = useEditor((s) => s.markColorPlaced);
 
   const [mode, setMode] = useState<'usage' | 'cost'>('usage');
   const [openIdx, setOpenIdx] = useState<number | null>(null);
@@ -100,7 +103,7 @@ export default function UsagePanel() {
         <i style={{ width: `${pct}%` }} />
       </div>
 
-      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
+      <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
         <button
           className={'btn sm ' + (flags.progressMode ? 'primary' : '')}
           onClick={() => toggleFlag('progressMode')}
@@ -110,12 +113,39 @@ export default function UsagePanel() {
           <IconCheck width={12} height={12} />
           {flags.progressMode ? '进度模式 开' : '进度模式'}
         </button>
+        <button
+          className={'btn sm ' + (soloColor !== null ? 'primary' : '')}
+          onClick={() => setSoloColor(soloColor === null ? colorIndex : null)}
+          title="单色模式：只拼当前这个色号，画布上其它颜色会压暗，一格一格对色时更好找"
+        >
+          {soloColor === null ? '单色' : `单色 ${doc.palette[soloColor]?.code ?? ''}`}
+        </button>
+      </div>
+
+      {soloColor !== null && (
+        <div className="hint-box" style={{ marginBottom: 10 }}>
+          单色模式：现在只拼 <b>{doc.palette[soloColor]?.code} {doc.palette[soloColor]?.name}</b>
+          ，点别的颜色不会误勾；点上面的「单色」退出。
+        </div>
+      )}
+
+      <div style={{ display: 'flex', gap: 6, marginBottom: 12 }}>
         <button className="btn sm" onClick={() => markAllPlaced(true)} title="全部标记为已拼">
           全拼
         </button>
         <button className="btn sm" onClick={() => markAllPlaced(false)} title="清空进度">
           重置
         </button>
+        {soloColor !== null && (
+          <button
+            className="btn sm"
+            onClick={() => markColorPlaced(soloColor, true)}
+            title="把单色模式这个色号整色标记为完成"
+          >
+            <IconCheck width={12} height={12} />
+            整色完成
+          </button>
+        )}
       </div>
 
       {mode === 'cost' && (
@@ -186,11 +216,18 @@ export default function UsagePanel() {
         {mode === 'usage'
           ? rows.map((r) => {
               const p = r.total ? (r.placed / r.total) * 100 : 0;
+              const allDone = r.placed >= r.total;
               return (
                 <div
                   key={r.idx}
-                  className={'usage-row' + (r.idx === colorIndex ? ' active' : '')}
-                  onClick={() => setColorIndex(r.idx)}
+                  className={
+                    'usage-row' + (r.idx === colorIndex ? ' active' : '') + (r.idx === soloColor ? ' solo' : '')
+                  }
+                  onClick={() => {
+                    setColorIndex(r.idx);
+                    // 单色模式开着的时候，点哪一行就切到哪一行，不用来回点两次
+                    if (soloColor !== null) setSoloColor(r.idx);
+                  }}
                 >
                   <div className="usage-dot" style={{ background: r.color.hex }} />
                   <div className="usage-name">
@@ -205,6 +242,17 @@ export default function UsagePanel() {
                     {r.total}
                     <small>{r.placed > 0 ? `已 ${r.placed}` : '颗'}</small>
                   </div>
+                  <button
+                    type="button"
+                    className={'usage-act' + (allDone ? ' done' : '')}
+                    title={allDone ? `取消 ${r.color.code} 整色完成` : `一键把 ${r.color.code} 整色标为完成`}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      markColorPlaced(r.idx, !allDone);
+                    }}
+                  >
+                    <IconCheck width={11} height={11} />
+                  </button>
                 </div>
               );
             })

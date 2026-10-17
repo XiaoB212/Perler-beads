@@ -44,6 +44,8 @@ import { eventToBinding, keyLabel, loadKeymap, resolveAction, type KeyMap } from
 import { docToThumb, parseProject, totalBeads } from './core/export';
 import { readIndex, saveDoc } from './core/storage';
 import { boardCount } from './core/board';
+import { DEFAULT_PALETTE_KEY, palettePreset } from './core/palette';
+import { SHARE_PREFIX, decodeShare, progressStat } from './core/share';
 
 type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys';
 type SideTab = 'colors' | 'usage' | 'settings';
@@ -181,6 +183,36 @@ export default function App() {
       // 不自动加载，避免覆盖用户预期；仅在标题处提示
     }
   }, []);
+
+  // 分享链接（#p=…）：打开就能看到对方拼到哪儿了
+  useEffect(() => {
+    const hash = window.location.hash;
+    if (!hash.startsWith(SHARE_PREFIX)) return;
+    const shared = decodeShare(hash);
+    if (shared) {
+      const pal = shared.palette.length ? shared.palette : palettePreset(DEFAULT_PALETTE_KEY);
+      const now = Date.now();
+      loadDocument({
+        id: `share-${now.toString(36)}`,
+        name: shared.name,
+        width: shared.width,
+        height: shared.height,
+        pegboard: shared.pegboard,
+        palette: pal,
+        cells: shared.cells,
+        progress: shared.progress,
+        createdAt: now,
+        updatedAt: shared.updatedAt || now,
+        notes: '',
+      });
+      const stat = progressStat(shared.cells, shared.progress);
+      notify(`已打开分享的图纸「${shared.name}」· 拼了 ${stat.placed} / ${stat.total} 颗`, 'ok');
+    } else {
+      notify('这个分享链接读不出来（链接可能被截断了）', 'warn');
+    }
+    // 读完就把 hash 清掉，之后的编辑与自动保存才不会被链接反复覆盖
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+  }, [loadDocument, notify]);
 
   // 自动保存（3 秒防抖）
   useEffect(() => {
@@ -423,6 +455,7 @@ export default function App() {
 
   const colorIndex = useEditor((s) => s.colorIndex);
   const cur = doc.palette[colorIndex];
+  const soloColor = useEditor((s) => s.soloColor);
 
   const sideBody = (t: SideTab) => {
     if (t === 'colors')
@@ -617,6 +650,21 @@ export default function App() {
             )}
 
             <div className="stage-topbar">
+              {cur && (
+                <span
+                  className={'tbar-chip current-color' + (soloColor !== null ? ' on' : '')}
+                  title={
+                    soloColor !== null
+                      ? `正在拼：${cur.brand} ${cur.code} ${cur.name}（单色模式）`
+                      : `正在拼：${cur.brand} ${cur.code} ${cur.name}`
+                  }
+                >
+                  <i className="cc-dot" style={{ background: cur.hex }} />
+                  <b className="cc-code">{cur.code}</b>
+                  <span className="cc-name">{cur.name}</span>
+                  {soloColor !== null && <em className="cc-solo">单色</em>}
+                </span>
+              )}
               <button
                 className={'tbar-chip' + (flags.progressMode ? ' on' : '')}
                 onClick={() => toggleFlag('progressMode')}

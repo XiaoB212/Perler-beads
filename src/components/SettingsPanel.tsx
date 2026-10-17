@@ -11,6 +11,7 @@ import {
   boardsOf,
 } from '../core/board';
 import { IconBoard, IconCode, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconMoon, IconRuler, IconSun } from './Icons';
+import ProgressPanel from './ProgressPanel';
 
 interface Props {
   themeMode?: ThemeMode;
@@ -86,16 +87,51 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
           />
           <span className="val">{brushSize}px</span>
         </div>
-        <div className="seg-wrap" style={{ marginTop: 6 }}>
-          {[1, 2, 3, 5, 8, 12].map((n) => (
-            <button
-              key={n}
-              className={brushSize === n ? 'active' : ''}
-              onClick={() => setBrushSize(n)}
-            >
-              {n}
-            </button>
-          ))}
+        {/* 预设只是快速档；真的想要几格就按加减或者直接填（用户 m06903） */}
+        <div className="brush-row" style={{ marginTop: 6 }}>
+          <button
+            type="button"
+            className="brush-step"
+            onClick={() => setBrushSize(brushSize - 1)}
+            disabled={brushSize <= 1}
+            aria-label="变细"
+          >
+            −
+          </button>
+          <input
+            type="number"
+            className="input brush-input"
+            min={1}
+            max={16}
+            value={brushSize}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (Number.isFinite(v)) setBrushSize(Math.floor(v));
+            }}
+            title="直接填 1-16"
+          />
+          <button
+            type="button"
+            className="brush-step"
+            onClick={() => setBrushSize(brushSize + 1)}
+            disabled={brushSize >= 16}
+            aria-label="变粗"
+          >
+            +
+          </button>
+          <span className="brush-preview" aria-hidden>
+            <i style={{ width: Math.min(18, 3 + brushSize * 2), height: Math.min(18, 3 + brushSize * 2) }} />
+          </span>
+          <div className="seg-wrap" style={{ marginLeft: 'auto' }}>
+            {[1, 2, 3, 5, 8, 12].map((n) => (
+              <button key={n} className={brushSize === n ? 'active' : ''} onClick={() => setBrushSize(n)}>
+                {n}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="hint-box" style={{ marginTop: 6 }}>
+          也可以用键盘 <b>[</b> 变细、<b>]</b> 变粗。粗细是「格」不是像素，格子小的时候 1 格最稳。
         </div>
       </div>
 
@@ -145,12 +181,14 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
         ))}
       </div>
 
+      {flags.progressMode && <ProgressPanel />}
+
       <div className="divider" />
       <div className="panel-head">
         <span className="panel-title">拼豆板</span>
       </div>
       <div className="field" style={{ marginBottom: 10 }}>
-        <label>单板格数（用于分板参考线）</label>
+        <label>单板格数（正方形，横竖相同）</label>
         <div className="seg-wrap">
           {PEGBOARD_PRESETS.map((p) => (
             <button
@@ -167,7 +205,7 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
           <input
             type="number"
             className="input"
-            min={2}
+            min={1}
             max={PEGBOARD_MAX}
             value={doc.pegboard || ''}
             placeholder="不分板"
@@ -176,7 +214,7 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
               setPegboard(Number.isFinite(v) && v > 0 ? v : 0);
             }}
             style={{ width: 92 }}
-            title="也可以直接填任意格数，不限于上面的预设"
+            title="可以直接填任意格数（1、十几、一百几都行），不限于上面的预设"
           />
           <span className="val">× {doc.pegboard || 0} 格</span>
         </div>

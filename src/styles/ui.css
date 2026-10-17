@@ -433,3 +433,60 @@ input[type='range']::-moz-range-thumb {
   line-height: 1.7;
   color: var(--ink-2);
 }
+
+/* 导出面板的「色号印得清吗」提前提示：看清是绿的，看不清是琥珀色并给一键改法 */
+.advice-box {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--fill-1);
+  margin-bottom: 12px;
+}
+.advice-box.ok {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.advice-box.warn {
+  border-color: rgba(214, 150, 40, 0.5);
+  background: rgba(214, 150, 40, 0.09);
+}
+.advice-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.advice-main b {
+  font-size: 12px;
+}
+.advice-box.warn .advice-main b {
+  color: #b9803a;
+}
+.advice-box.ok .advice-main b {
+  color: var(--accent);
+}
+.advice-main span {
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+.advice-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.checkbox-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11.5px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.checkbox-line .checkbox {
+  flex: none;
+  margin-top: 1px;
+}

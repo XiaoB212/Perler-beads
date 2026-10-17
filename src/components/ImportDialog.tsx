@@ -5,7 +5,7 @@ import { BUILTIN_PALETTES, BRAND_LABEL, PALETTE_KEYS, palettePreset } from '../c
 import type { BeadColor } from '../core/types';
 import { IconCheck, IconClose, IconImage, IconUpload, IconWand } from './Icons';
 import { renderPatternCanvas } from '../core/export';
-import { PEGBOARD_MAX, PEGBOARD_PRESETS, clampPegboard } from '../core/board';
+import { PEGBOARD_MAX, PEGBOARD_PRESETS, CANVAS_MAX, clampPegboard } from '../core/board';
 
 interface Props {
   onClose: () => void;
@@ -17,6 +17,49 @@ type Sample = 'point' | 'average';
 
 /** 单板格数常用档：直接取拼豆板规格表，和画布设置里的分板保持一致 */
 const BOARD_SIZES = PEGBOARD_PRESETS.filter((p) => p.value > 0);
+
+/** 板数步进器：既能按加减，也能直接填数字 */
+function TileStepper({
+  label,
+  value,
+  text,
+  max,
+  min = 1,
+  onText,
+  onCommit,
+}: {
+  label: string;
+  value: number;
+  text: string;
+  max: number;
+  min?: number;
+  onText: (s: string) => void;
+  onCommit: (n: number) => void;
+}) {
+  return (
+    <>
+      <span className="val" style={{ width: 'auto' }}>
+        {label}
+      </span>
+      <button className="chip" onClick={() => onCommit(Math.max(min, value - 1))} title="少一块板">
+        −
+      </button>
+      <input
+        type="number"
+        className="input"
+        style={{ width: 62 }}
+        min={min}
+        max={max}
+        value={text}
+        onChange={(e) => onText(e.target.value)}
+        onBlur={() => onCommit(value)}
+      />
+      <button className="chip" onClick={() => onCommit(Math.min(max, value + 1))} title="多一块板">
+        +
+      </button>
+    </>
+  );
+}
 
 export default function ImportDialog({ onClose, initialFile }: Props) {
   const doc = useEditor((s) => s.doc);
@@ -42,6 +85,12 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const [saturation, setSaturation] = useState(1);
   const [transparentWhite, setTransparentWhite] = useState(true);
   const [whiteThreshold, setWhiteThreshold] = useState(242);
+  // 参考比例（1 颗豆 ≈ 原图几个像素）与豆子规格：只当辅助参考，帮用户估成品多大
+  const [ratioText, setRatioText] = useState('2');
+  const [beadMm, setBeadMm] = useState(5);
+  // 板数允许中途清空重填（以前 0 删不掉，被用户吐槽过）
+  const [colsText, setColsText] = useState('2');
+  const [rowsText, setRowsText] = useState('2');
   // 默认用品牌全色板（色阶充足，渐变过渡自然）；当前图纸色板通常只有几种颜色，留给用户主动选
   const [useDocPalette, setUseDocPalette] = useState(false);
   // 直接用完整 key，避免再靠 ALIASES 把 'mard' 映射成 'mard291'
@@ -52,6 +101,44 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
 
   const width = boardSize * cols;
   const height = boardSize * rows;
+
+  // 板数上限：单边 ≤ CANVAS_MAX，总数也别太夸张，免得一不小心生成百万格
+  const maxTiles = Math.max(1, Math.min(16, Math.floor(CANVAS_MAX / Math.max(1, boardSize))));
+  useEffect(() => {
+    setCols((c) => {
+      const n = Math.min(c, maxTiles);
+      setColsText(String(n));
+      return n;
+    });
+    setRows((r) => {
+      const n = Math.min(r, maxTiles);
+      setRowsText(String(n));
+      return n;
+    });
+  }, [maxTiles]);
+
+  /** 解析用户手填的板数；留空或非法返回 null（保持原值，允许清空重填） */
+  const parseTiles = (raw: string): number | null => {
+    if (raw.trim() === '') return null;
+    const v = Number(raw);
+    if (!Number.isFinite(v)) return null;
+    return Math.max(1, Math.min(maxTiles, Math.round(v)));
+  };
+
+  /** 原图每个像素大约对应多大一块豆子（越小越精细） */
+  const pxPerBead = img ? img.naturalWidth / Math.max(1, width) : 0;
+
+  /** 按「1 颗豆 ≈ N 个原图像素」反推需要几块板 */
+  const applyRatio = (r: number) => {
+    if (!img || !Number.isFinite(r) || r <= 0) return;
+    const c = Math.max(1, Math.min(maxTiles, Math.round(img.naturalWidth / r / boardSize)));
+    const rw = Math.max(1, Math.min(maxTiles, Math.round(img.naturalHeight / r / boardSize)));
+    setCols(c);
+    setRows(rw);
+    setColsText(String(c));
+    setRowsText(String(rw));
+    setRatioText(String(r));
+  };
 
   const palette: BeadColor[] = useMemo(() => {
     return useDocPalette ? doc.palette : palettePreset(brandKey);
@@ -311,27 +398,102 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                 <div className="field">
                   <label>用几块板（横 × 纵）</label>
                   <div className="slider-row">
-                    <span className="val" style={{ width: 'auto' }}>横</span>
-                    <input
-                      type="range"
-                      min={1}
-                      max={8}
+                    <TileStepper
+                      label="横"
                       value={cols}
-                      onChange={(e) => setCols(Number(e.target.value))}
+                      text={colsText}
+                      max={maxTiles}
+                      onText={(s) => {
+                        setColsText(s);
+                        const n = parseTiles(s);
+                        if (n != null) setCols(n);
+                      }}
+                      onCommit={(n) => {
+                        setCols(n);
+                        setColsText(String(n));
+                      }}
                     />
-                    <span className="val">{cols}</span>
-                    <span className="val" style={{ width: 'auto', marginLeft: 6 }}>纵</span>
-                    <input
-                      type="range"
-                      min={1}
-                      max={8}
+                    <TileStepper
+                      label="纵"
                       value={rows}
-                      onChange={(e) => setRows(Number(e.target.value))}
+                      text={rowsText}
+                      max={maxTiles}
+                      onText={(s) => {
+                        setRowsText(s);
+                        const n = parseTiles(s);
+                        if (n != null) setRows(n);
+                      }}
+                      onCommit={(n) => {
+                        setRows(n);
+                        setRowsText(String(n));
+                      }}
                     />
-                    <span className="val">{rows}</span>
                   </div>
                   <span className="hint">
                     {cols} × {rows} = {cols * rows} 块 {boardSize}×{boardSize} 板，合计 {width} × {height} 格
+                  </span>
+                </div>
+
+                <div className="field">
+                  <label>参考比例（1 颗豆 ≈ 原图几个像素）</label>
+                  <div className="slider-row">
+                    <span className="val" style={{ width: 'auto' }}>1:</span>
+                    <input
+                      type="number"
+                      className="input"
+                      min={0.5}
+                      max={16}
+                      step={0.5}
+                      value={ratioText}
+                      onChange={(e) => setRatioText(e.target.value)}
+                      onBlur={() => {
+                        const v = Number(ratioText);
+                        if (Number.isFinite(v) && v > 0) applyRatio(v);
+                        else setRatioText(pxPerBead ? pxPerBead.toFixed(1) : '2');
+                      }}
+                      style={{ width: 72 }}
+                    />
+                    <span className="val">
+                      {pxPerBead ? `现在约 1:${pxPerBead.toFixed(1)}` : '选图后可调'}
+                    </span>
+                  </div>
+                  <div className="seg-row" style={{ marginTop: 4 }}>
+                    {[1, 1.5, 2, 3, 4].map((r) => (
+                      <button
+                        key={r}
+                        className={pxPerBead && Math.abs(pxPerBead - r) < 0.15 ? 'active' : ''}
+                        onClick={() => applyRatio(r)}
+                        title={`每 ${r} 个原图像素合成 1 颗豆`}
+                      >
+                        1:{r}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="hint">
+                    只是个参考，怎么好看怎么调：比例小＝格子多、细节多；比例大＝格子少、更省豆子。
+                  </span>
+                </div>
+
+                <div className="field">
+                  <label>成品大概多大（参考）</label>
+                  <div className="seg-row">
+                    {[
+                      { mm: 2.6, l: '2.6mm 迷你' },
+                      { mm: 5, l: '5mm 中豆' },
+                      { mm: 10, l: '10mm 大豆' },
+                    ].map((b) => (
+                      <button
+                        key={b.mm}
+                        className={beadMm === b.mm ? 'active' : ''}
+                        onClick={() => setBeadMm(b.mm)}
+                      >
+                        {b.l}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="hint">
+                    约 {((width * beadMm) / 10).toFixed(1)} × {((height * beadMm) / 10).toFixed(1)} cm ·{' '}
+                    {width} × {height} = {width * height} 格
                   </span>
                 </div>
 

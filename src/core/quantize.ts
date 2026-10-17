@@ -1,4 +1,4 @@
-import { nearestInPalette, hexToLab, buildPaletteLab, type PaletteLab } from './color';
+import { nearestInPalette, rgbToLab, buildPaletteLab, type PaletteLab } from './color';
 import type { BeadColor } from './types';
 import { EMPTY } from './types';
 
@@ -34,7 +34,7 @@ export const DEFAULT_QUANTIZE: Omit<QuantizeOptions, 'width' | 'height' | 'palet
   brightness: 1,
   contrast: 1,
   saturation: 1,
-  transparentWhite: true,
+  transparentWhite: false,
   whiteThreshold: 246,
   edgeBoost: 0,
 };
@@ -239,34 +239,33 @@ export function quantizeImage(
   const palette = opts.palette;
   const pl: PaletteLab = buildPaletteLab(palette);
   const cells = new Uint16Array(total);
+  if (!palette.length) return { cells, palette, usedCount: 0 };
 
-  // 选出有效像素（非背景）
-  const valid: number[] = [];
-  for (let i = 0; i < total; i++) if (!isBg[i]) valid.push(i);
-
-  if (!valid.length || !palette.length) return { cells, palette, usedCount: 0 };
+  let validCount = 0;
+  for (let i = 0; i < total; i++) if (!isBg[i]) validCount++;
+  if (!validCount) return { cells, palette, usedCount: 0 };
 
   const maxColors = Math.max(1, Math.min(opts.maxColors || palette.length, palette.length));
 
   // 若颜色上限 >= 色板容量，直接逐格匹配（最准）
   const useDirect = maxColors >= palette.length;
 
-  // 1) 图像代表色（Lab 空间）
-  const labSamples = new Float32Array(valid.length * 3);
-  for (let k = 0; k < valid.length; k++) {
-    const i = valid[k];
-    const lab = hexToLab(
-      '#' +
-        [rgb[i * 3], rgb[i * 3 + 1], rgb[i * 3 + 2]]
-          .map((v) => Math.round(v).toString(16).padStart(2, '0'))
-          .join(''),
-    );
-    labSamples[k * 3] = lab.l;
-    labSamples[k * 3 + 1] = lab.a;
-    labSamples[k * 3 + 2] = lab.b;
+  // 1) 图像代表色（Lab 空间）——只有需要 k-means 降色时才付这份钱。
+  //    之前无论走不走 k-means 都要给每个像素转一次 Lab，纯属白干。
+  let centers: number[][] = [];
+  if (!useDirect) {
+    const valid: number[] = [];
+    for (let i = 0; i < total; i++) if (!isBg[i]) valid.push(i);
+    const labSamples = new Float32Array(valid.length * 3);
+    for (let k = 0; k < valid.length; k++) {
+      const i = valid[k];
+      const lab = rgbToLab({ r: rgb[i * 3], g: rgb[i * 3 + 1], b: rgb[i * 3 + 2] });
+      labSamples[k * 3] = lab.l;
+      labSamples[k * 3 + 1] = lab.a;
+      labSamples[k * 3 + 2] = lab.b;
+    }
+    centers = kmeansCenters(labSamples, maxColors, 6);
   }
-
-  const centers = useDirect ? [] : kmeansCenters(labSamples, maxColors, 6);
   // 代表色 -> 色板下标
   const centerPaletteIdx = centers.map((c) => nearestInPalette({ l: c[0], a: c[1], b: c[2] }, pl));
 
@@ -275,21 +274,39 @@ export function quantizeImage(
   const dither = opts.dither;
   const used = new Set<number>();
 
+  /**
+   * 逐格找色号。这是整条链路最热的地方，所以：
+   * - 不再每个像素拼一次 hex 字符串再 parse 回来（rgbToLab 直接吃整数）；
+   * - 按量化后的 RGB 做缓存：平均采样后的图大片同色，命中率极高，
+   *   照片里重复色也比想象中多。
+   */
+  const cache = new Map<number, number>();
   const nearest = (r: number, g: number, b: number): number => {
-    const hex = '#' + [r, g, b].map((v) => Math.max(0, Math.min(255, Math.round(v))).toString(16).padStart(2, '0')).join('');
-    const lab = hexToLab(hex);
-    if (useDirect) return nearestInPalette(lab, pl);
-    // 先找最近代表色，再映射到色板
-    let bi = 0;
-    let bd = Infinity;
-    for (let c = 0; c < centers.length; c++) {
-      const d = (lab.l - centers[c][0]) ** 2 + (lab.a - centers[c][1]) ** 2 + (lab.b - centers[c][2]) ** 2;
-      if (d < bd) {
-        bd = d;
-        bi = c;
+    const ri = r < 0 ? 0 : r > 255 ? 255 : Math.round(r);
+    const gi = g < 0 ? 0 : g > 255 ? 255 : Math.round(g);
+    const bi = b < 0 ? 0 : b > 255 ? 255 : Math.round(b);
+    const key = (ri << 16) | (gi << 8) | bi;
+    const hit = cache.get(key);
+    if (hit !== undefined) return hit;
+    const lab = rgbToLab({ r: ri, g: gi, b: bi });
+    let idx: number;
+    if (useDirect) {
+      idx = nearestInPalette(lab, pl);
+    } else {
+      // 先找最近代表色，再映射到色板
+      let best = 0;
+      let bd = Infinity;
+      for (let c = 0; c < centers.length; c++) {
+        const d = (lab.l - centers[c][0]) ** 2 + (lab.a - centers[c][1]) ** 2 + (lab.b - centers[c][2]) ** 2;
+        if (d < bd) {
+          bd = d;
+          best = c;
+        }
       }
+      idx = centerPaletteIdx[best] ?? 0;
     }
-    return centerPaletteIdx[bi] ?? 0;
+    cache.set(key, idx);
+    return idx;
   };
 
   // BAYER 8×8：有序抖动（不扩散误差，图案稳定不「流水」）

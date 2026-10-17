@@ -153,6 +153,22 @@ interface EditorState {
   focus: FocusState | null;
   /** 进度模式下本次拖动是「标记已拼」还是「取消已拼」 */
   progressTarget: 0 | 1;
+  /**
+   * 对色拼装：当前正在拼的色号（doc.palette 下标）。-1 表示还没选。
+   * 只有 flags.progressCheck 打开时才参与判定。
+   */
+  checkColor: number;
+  /** 对色拼装点错的格子（画叉），点对了会自动消掉 */
+  wrongMarks: Set<number>;
+  /** 累计打叉次数（用于算准确率，不会因为修正而减少） */
+  wrongCount: number;
+  /** 累计正确放置次数 */
+  rightCount: number;
+  /**
+   * 单色模式：!= null 时只对这一个色号动手（进度勾选、画布压暗其它颜色）。
+   * 「先拼哪个颜色就单独拼它」靠这个。
+   */
+  soloColor: number | null;
   toast: { id: number; text: string; kind?: 'ok' | 'warn' } | null;
   dirty: boolean;
   docMetaList: DocMeta[];
@@ -188,6 +204,19 @@ interface EditorState {
 
   paintCell: (x: number, y: number, opts?: PaintOptions) => void;
   paintProgressCell: (x: number, y: number, value: 0 | 1) => void;
+  /** 对色拼装时选「正在拼的色号」，传 -1 表示不挑色 */
+  setCheckColor: (i: number) => void;
+  /** 单色模式：只拼这一个色号；传 null 退出 */
+  setSoloColor: (i: number | null) => void;
+  /** 一键把某个色号整色标记为已拼 / 未拼 */
+  markColorPlaced: (index: number, v: boolean) => void;
+  /**
+   * 进度模式的一次点击。开对色检查时按色号判定：对了打勾、错了打叉；
+   * 关掉时就是简单取反。
+   */
+  clickProgress: (x: number, y: number) => void;
+  /** 清空所有打叉标记（保留累计次数） */
+  clearWrong: () => void;
   floodFill: (x: number, y: number) => void;
   drawLine: (x0: number, y0: number, x1: number, y1: number) => void;
   drawShape: (kind: 'rect' | 'ellipse', x0: number, y0: number, x1: number, y1: number) => void;
@@ -241,6 +270,11 @@ export const useEditor = create<EditorState>((set, get) => ({
   strokeActive: false,
   focus: null,
   progressTarget: 1,
+  checkColor: -1,
+  wrongMarks: new Set<number>(),
+  wrongCount: 0,
+  rightCount: 0,
+  soloColor: null,
   toast: null,
   dirty: false,
   docMetaList: [],
@@ -345,7 +379,7 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   paintProgressCell: (x, y, value) => {
-    const { doc, brushSize, focus } = get();
+    const { doc, brushSize, focus, soloColor } = get();
     const r = Math.floor((brushSize - 1) / 2);
     let changed = false;
     for (let dy = -r; dy <= r; dy++) {
@@ -355,6 +389,8 @@ export const useEditor = create<EditorState>((set, get) => ({
         if (!allows(focus, doc.width, doc.height, px, py)) continue;
         const i = py * doc.width + px;
         if (doc.cells[i] === 0) continue;
+        // 单色模式只动这一个色号
+        if (soloColor !== null && doc.cells[i] - 1 !== soloColor) continue;
         if (doc.progress[i] !== value) {
           doc.progress[i] = value;
           changed = true;
@@ -363,6 +399,76 @@ export const useEditor = create<EditorState>((set, get) => ({
     }
     if (changed) set({ doc: { ...doc, updatedAt: Date.now() }, dirty: true });
   },
+
+  setCheckColor: (i) => set({ checkColor: i }),
+
+  setSoloColor: (i) => set({ soloColor: i }),
+
+  markColorPlaced: (index, v) => {
+    const { doc } = get();
+    const want = index + 1;
+    const progress = doc.progress.slice();
+    let changed = false;
+    for (let i = 0; i < doc.cells.length; i++) {
+      if (doc.cells[i] !== want) continue;
+      const next = v ? 1 : 0;
+      if (progress[i] !== next) {
+        progress[i] = next;
+        changed = true;
+      }
+    }
+    if (!changed) return;
+    set({ doc: { ...doc, progress, updatedAt: Date.now() }, dirty: true });
+    const color = doc.palette[index];
+    get().notify(
+      `${color ? `${color.code} ${color.name}` : '该色号'} 整色已${v ? '标记完成' : '取消完成'}`,
+      'ok',
+    );
+  },
+
+  clickProgress: (x, y) => {
+    const { doc, brushSize, focus, flags, checkColor, soloColor } = get();
+    if (!allows(focus, doc.width, doc.height, x, y)) return;
+    const i = y * doc.width + x;
+    if (doc.cells[i] === 0) return;
+    // 单色模式：点到别的颜色直接不理，避免手滑把别的色号也勾上
+    if (soloColor !== null && doc.cells[i] - 1 !== soloColor) return;
+
+    // 只有「对色拼装」才做色号判定；否则保持原来的随手打勾
+    if (flags.progressCheck && checkColor >= 0) {
+      const want = checkColor + 1;
+      const hit = doc.cells[i] === want;
+      const progress = new Uint8Array(doc.progress);
+      const wrong = new Set(get().wrongMarks);
+      let rightCount = get().rightCount;
+      let wrongCount = get().wrongCount;
+
+      if (hit) {
+        const already = progress[i] === 1;
+        progress[i] = already ? 0 : 1;
+        if (!already) rightCount += 1;
+        wrong.delete(i);
+      } else {
+        wrong.add(i);
+        wrongCount += 1;
+      }
+      void brushSize;
+      set({
+        doc: { ...doc, progress, updatedAt: Date.now() },
+        wrongMarks: wrong,
+        rightCount,
+        wrongCount,
+        dirty: true,
+      });
+      return;
+    }
+
+    get().beginStroke();
+    get().paintProgressCell(x, y, doc.cells[i] && doc.progress[i] ? 0 : 1);
+    get().endStroke();
+  },
+
+  clearWrong: () => set({ wrongMarks: new Set<number>() }),
 
   floodFill: (x, y) => {
     const { doc, colorIndex, focus } = get();
@@ -471,6 +577,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       dirty: true,
       hover: null,
       focus: null,
+      checkColor: -1,
+      wrongMarks: new Set<number>(),
+      wrongCount: 0,
+      rightCount: 0,
+      soloColor: null,
     });
   },
 
@@ -485,6 +596,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       dirty: false,
       hover: null,
       focus: null,
+      checkColor: -1,
+      wrongMarks: new Set<number>(),
+      wrongCount: 0,
+      rightCount: 0,
+      soloColor: null,
     });
   },
 
@@ -515,7 +631,15 @@ export const useEditor = create<EditorState>((set, get) => ({
       focus && focus.col < boardCols(next.width, focus.size) && focus.row < boardRows(next.height, focus.size)
         ? focus
         : null;
-    set({ doc: next, past: get().past.concat([snap]), future: [], dirty: true, focus: nextFocus });
+    set({
+      doc: next,
+      past: get().past.concat([snap]),
+      future: [],
+      dirty: true,
+      focus: nextFocus,
+      // 尺寸变了，叉号的下标会整体错位，直接清掉
+      wrongMarks: new Set<number>(),
+    });
   },
 
   setPegboard: (n) => {
@@ -650,6 +774,11 @@ export const useEditor = create<EditorState>((set, get) => ({
       dirty: true,
       hover: null,
       focus: null,
+      checkColor: -1,
+      wrongMarks: new Set<number>(),
+      wrongCount: 0,
+      rightCount: 0,
+      soloColor: null,
     });
   },
 
@@ -679,10 +808,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     const { x, y } = hover;
     if (x < 0 || y < 0 || x >= doc.width || y >= doc.height) return;
     if (flags.progressMode) {
-      const i = y * doc.width + x;
-      get().beginStroke();
-      get().paintProgressCell(x, y, doc.cells[i] && doc.progress[i] ? 0 : 1);
-      get().endStroke();
+      get().clickProgress(x, y);
       return;
     }
     if (tool === 'picker') {

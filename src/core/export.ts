@@ -71,11 +71,27 @@ export function usageRows(doc: PatternDoc): { color: BeadColor; count: number }[
 /** 用量表排版：按可用宽度决定列数，返回列宽、行高与总高（单位与传入一致） */
 function legendMetrics(rows: number, availW: number, scale = 1) {
   const minCol = 132 * scale;
-  const cols = Math.max(1, Math.min(6, Math.floor(availW / minCol)));
+  const cols = Math.max(1, Math.min(8, Math.floor(availW / minCol)));
   const colW = availW / Math.max(1, cols);
   const rowH = 27 * scale;
   const headH = rows > 0 ? 30 * scale : 0;
   return { cols, colW, rowH, headH, height: headH + Math.ceil(rows / cols) * rowH + 10 * scale };
+}
+
+/**
+ * 用量表 / 水印的缩放系数。
+ *
+ * 以前只按「单格像素」算，并且夹在 1.6 以内。问题是 SVG 在浏览器里是铺满窗口打开的：
+ * 一张 6000px 宽的图会被缩到 0.13 倍，底部那颗数在屏幕上只剩一两像素，用户根本看不清
+ * （「svg 的那个数量在最下面太小了，看不清数量，我弄的这个应该是 68946 格」）。
+ *
+ * 所以除了单格像素，还要让缩放跟着「整张图有多宽」一起长 —— 这样用量表始终占整图
+ * 大约十分之一的宽度，缩到窗口里也读得清。小图取两者较大值，行为和以前一致。
+ */
+function legendScaleFor(cs: number, bodyW: number, minScale: number, maxCellScale: number): number {
+  const byCell = Math.max(minScale, Math.min(maxCellScale, cs / 18));
+  const byImage = Math.min(40, bodyW / 900);
+  return Math.max(byCell, byImage);
 }
 
 /** 水印占用的高度 */
@@ -140,20 +156,23 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
   const lay = boardLayout(doc, bs, gap);
   const spanW = lay.spanX;
   const spanH = lay.spanY;
-  const padTop = opts.coords ? Math.max(18, cs * 1.1) : 6;
+  const padTopBase = opts.coords ? Math.max(18, cs * 1.1) : 6;
   const padLeft = opts.coords ? Math.max(20, cs * 1.2) : 6;
   const pad = 8;
+  // 带标题时在最上面留一条抬头，用来标明这是哪一块板（一板一页导出用）
+  const headH = opts.title ? Math.max(28, cs * 1.8) : 0;
+  const padTop = headH + padTopBase;
   const gridW = spanW * cs;
   const gridH = spanH * cs;
   // 左右、上下留白对称，图纸落在画面正中间，不贴左上角
   const padRight = Math.max(pad, padLeft);
-  const padBottom = Math.max(pad, padTop);
+  const padBottom = Math.max(pad, padTopBase);
   const bodyW = padLeft + gridW + padRight;
 
   // 缩略图尺寸下（cs < 6）用量表会挤成一团，直接不画
   const detailed = cs >= 6;
   const rows = opts.legend && detailed ? usageRows(doc) : [];
-  const legendScale = Math.max(0.55, Math.min(1.35, cs / 18));
+  const legendScale = legendScaleFor(cs, bodyW, 0.55, 1.35);
   const leg = opts.legend && detailed ? legendMetrics(rows.length, bodyW - pad * 2, legendScale) : null;
   const wmH = opts.watermark && detailed ? watermarkHeight(legendScale) : 0;
 
@@ -169,6 +188,22 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     ctx.fillRect(0, 0, w, h);
   } else {
     ctx.clearRect(0, 0, w, h);
+  }
+
+  // 抬头：一板一页导出时标明这是哪一块板，打印出来好对号
+  if (opts.title && headH > 0) {
+    const ts = Math.max(13, Math.min(Math.round(cs * 0.95), 30));
+    ctx.font = `700 ${ts}px "PingFang SC", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillStyle = '#12141d';
+    ctx.fillText(opts.title, padLeft, headH * 0.55 + ts * 0.36);
+    ctx.strokeStyle = 'rgba(20,24,30,0.22)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padLeft, headH - 1.5);
+    ctx.lineTo(w - padRight, headH - 1.5);
+    ctx.stroke();
   }
 
   // 格子底色
@@ -311,7 +346,7 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     for (let x = 0; x < width; x++) {
       if (x % 5 !== 0) continue;
       const px = padLeft + lay.x[x] * cs + cs / 2;
-      ctx.fillText(String(x + 1), px, padTop / 2 + 1);
+      ctx.fillText(String(x + 1), px, headH + padTopBase / 2 + 1);
     }
     ctx.textAlign = 'right';
     for (let y = 0; y < height; y++) {
@@ -433,7 +468,7 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
 
   // 用量表与水印
   const rows = opts.legend ? usageRows(doc) : [];
-  const s = Math.max(0.8, Math.min(1.6, cs / 18));
+  const s = legendScaleFor(cs, bodyW, 0.8, 1.6);
   const leg = opts.legend ? legendMetrics(rows.length, bodyW - pad * 2, s) : null;
   const wmH = opts.watermark ? watermarkHeight(s) : 0;
 
@@ -458,6 +493,22 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
   if (opts.background) out.push(`<rect width="${w}" height="${h}" fill="${opts.background}"/>`);
   out.push(`<g id="cells">`);
   const progressModeSvg = opts.progressStyle === 'placed';
+  const roundCell = opts.shape === 'circle';
+  const rad = (cs / 2) * 0.94;
+  /**
+   * 按「色号 + 是否已拼」分组，每组合并成一条 <path>。
+   * 以前是每颗豆子一个 <rect>：6.9 万格就是 6.9 万个节点、11MB 的 SVG，
+   * 浏览器一打开就卡。合并之后同样的图只剩几十条 path，体积降到几百 KB。
+   */
+  const cellGroups = new Map<string, { fill: string; op: number; d: string[] }>();
+  const holeGroups = new Map<number, string[]>();
+  const codeTexts: string[] = [];
+  const f2 = (n: number) => Number(n.toFixed(2));
+  // 中孔/圆格半径保留一位小数就够了：6.9 万格时能省下 1MB 多，肉眼看不出来
+  const fr = (n: number) => Number(n.toFixed(1));
+  const circlePath = (cx: number, cy: number, r: number) =>
+    `M${f2(cx - r)} ${f2(cy)}a${fr(r)} ${fr(r)} 0 1 0 ${fr(2 * r)} 0a${fr(r)} ${fr(r)} 0 1 0 ${fr(-2 * r)} 0`;
+
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
@@ -469,32 +520,46 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
       const py = padTop + lay.y[y] * cs;
       // 按进度上色：已拼保持原色，未拼淡化
       const done = !progressModeSvg || doc.progress[idx] === 1;
-      const op = done ? '' : ' fill-opacity="0.22"';
-      if (opts.shape === 'circle') {
-        const r = (cs / 2) * 0.94;
-        out.push(
-          `<circle cx="${(px + cs / 2).toFixed(2)}" cy="${(py + cs / 2).toFixed(2)}" r="${r.toFixed(2)}" fill="${c.hex}"${op}/>`,
-        );
-      } else {
-        out.push(`<rect x="${px}" y="${py}" width="${cs}" height="${cs}" fill="${c.hex}"${op}/>`);
+      const key = v + ':' + (done ? 1 : 0);
+      let g = cellGroups.get(key);
+      if (!g) {
+        g = { fill: c.hex, op: done ? 1 : 0.22, d: [] };
+        cellGroups.set(key, g);
       }
+      g.d.push(roundCell ? circlePath(px + cs / 2, py + cs / 2, rad) : `M${px} ${py}h${cs}v${cs}h${-cs}z`);
+
       if (opts.holes && cs >= 8 && !(opts.showCodes && cs >= 9)) {
-        out.push(
-          `<circle cx="${px + cs / 2}" cy="${py + cs / 2}" r="${(cs * 0.13).toFixed(2)}" fill="#ffffff" fill-opacity="${done ? 0.62 : 0.14}"/>`,
-        );
+        const o = done ? 0.62 : 0.14;
+        const arr = holeGroups.get(o);
+        const p = circlePath(px + cs / 2, py + cs / 2, cs * 0.13);
+        if (arr) arr.push(p);
+        else holeGroups.set(o, [p]);
       }
       if (opts.showCodes && cs >= 9 && done) {
         // 纯填充，不做描边：小字号描边会糊成一团，用户反馈「看起来很模糊」
         const fs = Math.min(cs * 0.5, (cs * 0.88) / Math.max(1, c.code.length * 0.62), 15);
         if (fs >= 4.6) {
-          out.push(
-            `<text x="${(px + cs / 2).toFixed(2)}" y="${(py + cs / 2 + fs * 0.34).toFixed(2)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="600" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" fill="${inkFor(c.hex)}">${escapeXml(c.code)}</text>`,
+          codeTexts.push(
+            `<text x="${f2(px + cs / 2)}" y="${f2(py + cs / 2 + fs * 0.34)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="600" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" fill="${inkFor(c.hex)}">${escapeXml(c.code)}</text>`,
           );
         }
       }
     }
   }
+  for (const g of cellGroups.values()) {
+    const op = g.op === 1 ? '' : ` fill-opacity="${g.op}"`;
+    out.push(`<path d="${g.d.join('')}" fill="${g.fill}"${op}/>`);
+  }
+  // 中孔在所有豆子之上，否则会被后画的豆子盖掉
+  for (const [o, arr] of holeGroups) {
+    out.push(`<path d="${arr.join('')}" fill="#ffffff" fill-opacity="${o}"/>`);
+  }
   out.push(`</g>`);
+  if (codeTexts.length) {
+    out.push(`<g id="codes">`);
+    out.push(...codeTexts);
+    out.push(`</g>`);
+  }
   if (opts.grid) {
     out.push(`<g id="grid" stroke="rgba(0,0,0,0.18)" stroke-width="0.5">`);
     for (let x = 0; x <= spanW; x++) {
@@ -1028,16 +1093,184 @@ function pdfSinglePage(pdf: jsPDF, doc: PatternDoc, opts: PdfOptions, pw: number
 /** 从图纸里裁一块子图（预览分板 / 分块页用），palette 与进度保持不变 */
 function subDoc(doc: PatternDoc, x0: number, y0: number, w: number, h: number): PatternDoc {
   const cells = new Uint16Array(w * h);
+  // 进度也要跟着切：只切 cells 的话 progress 还是整张图的长度，
+  // 后面按下标取进度会错位，分板导出会把「已拼」打到别的格子上。
+  const progress = new Uint8Array(w * h);
   for (let y = 0; y < h; y++) {
     const sy = y0 + y;
     if (sy >= doc.height) break;
     for (let x = 0; x < w; x++) {
       const sx = x0 + x;
       if (sx >= doc.width) break;
-      cells[y * w + x] = doc.cells[sy * doc.width + sx];
+      const si = sy * doc.width + sx;
+      const di = y * w + x;
+      cells[di] = doc.cells[si];
+      progress[di] = doc.progress[si];
     }
   }
-  return { ...doc, width: w, height: h, cells };
+  return { ...doc, width: w, height: h, cells, progress };
+}
+
+/**
+ * 色号能印清楚的最小单格尺寸。
+ * canvas / SVG 用像素，PDF 用毫米 —— 低于这个值色号会糊成一片，
+ * 与其画出来看不清，不如提前告诉用户「切成一块板一页」。
+ */
+export const CODE_MIN_PX = 13;
+export const CODE_MIN_MM = 3;
+
+export interface CellAdvice {
+  /** 每格实际占多少：png / svg 是像素，pdf 是毫米 */
+  size: number;
+  unit: 'px' | 'mm';
+  /** 色号是否印得清 */
+  legible: boolean;
+  /** 这块图纸一共几块板 */
+  boards: number;
+  /** 想看清色号，一整张至少要拆成几页 */
+  suggestPages: number;
+  /** 给用户看的一句话 */
+  hint: string;
+}
+
+/**
+ * 预估当前导出设置下每格有多大、色号能不能看清。
+ * 导出面板用它提前给建议，而不是等用户导完发现满屏小点。
+ */
+export function cellAdvice(
+  doc: PatternDoc,
+  fmt: 'png' | 'svg' | 'pdf',
+  o: {
+    cellSize?: number;
+    layout?: 'single' | 'boards' | 'tile';
+    boardSize?: number;
+    pageSize?: 'a4' | 'letter';
+    orientation?: 'portrait' | 'landscape' | 'auto';
+    coords?: boolean;
+  } = {},
+): CellAdvice {
+  const bs = Math.max(4, o.boardSize || doc.pegboard || 29);
+  const lay = boardLayout(doc, bs, 0);
+  const boards = lay.cols * lay.rows;
+
+  if (fmt === 'png' || fmt === 'svg') {
+    const size = safeCellSize(doc.width, doc.height, o.cellSize ?? 24);
+    const legible = size >= CODE_MIN_PX;
+    const want = Math.max(doc.width, doc.height) / CODE_MIN_PX;
+    return {
+      size: Math.round(size * 10) / 10,
+      unit: 'px',
+      legible,
+      boards,
+      suggestPages: want <= 1 ? 1 : Math.ceil(want / bs),
+      hint: legible
+        ? `每格约 ${size.toFixed(0)}px，色号印得清`
+        : `每格只剩 ${size.toFixed(0)}px，色号印不下；把「单格像素」调到 ${CODE_MIN_PX} 以上，或者用「一板一页」按板导出`,
+    };
+  }
+
+  const orientation: 'portrait' | 'landscape' =
+    o.orientation && o.orientation !== 'auto' ? o.orientation : doc.width > doc.height ? 'landscape' : 'portrait';
+  const [pw, ph] = pdfPageSize(o.pageSize ?? 'a4', orientation);
+  const margin = 10;
+  const coordPad = o.coords ? 6 : 1.5;
+  const availW = pw - margin * 2 - coordPad;
+
+  if (o.layout === 'boards') {
+    // 一板一页：格子大小按「完整一块板」算，和 pdfBoardPages 一致
+    const availH = ph - margin * 2 - (o.coords ? 3.6 : 0.6) - 26;
+    const cell = Math.max(0.4, Math.min(availW / bs, availH / bs));
+    const legible = cell >= CODE_MIN_MM;
+    return {
+      size: Math.round(cell * 10) / 10,
+      unit: 'mm',
+      legible,
+      boards,
+      suggestPages: boards,
+      hint: legible
+        ? `一板一页：每格约 ${cell.toFixed(1)}mm，色号清楚，每页标好是哪一块板`
+        : `一板一页每格约 ${cell.toFixed(1)}mm，还是偏小；把「拼豆板尺寸」调小一些（比如 15 或 29）会更清楚`,
+    };
+  }
+
+  const availH = ph - margin * 2 - 26;
+  const cell = Math.max(0.2, Math.min(availW / doc.width, availH / doc.height));
+  const legible = cell >= CODE_MIN_MM;
+  const suggest = Math.max(1, Math.ceil(doc.width / Math.max(1, Math.floor(availW / CODE_MIN_MM))));
+  return {
+    size: Math.round(cell * 10) / 10,
+    unit: 'mm',
+    legible,
+    boards,
+    suggestPages: suggest,
+    hint: legible
+      ? `整张一页：每格约 ${cell.toFixed(1)}mm，色号看得清`
+      : `整张一页每格只有 ${cell.toFixed(1)}mm，色号完全印不出来；改成「一板一页」，${boards} 块板分 ${boards} 页，每格能到 ${Math.min(availW / bs, availH / bs).toFixed(1)}mm`,
+  };
+}
+
+/** 一板一页导出 PNG：每块板一个文件，文件名和图上都标明是哪一块 */
+export async function exportBoardImagesPNG(doc: PatternDoc, opts: RenderOptions) {
+  const bs = Math.max(4, opts.boardSize || doc.pegboard || 29);
+  const lay = boardLayout(doc, bs, 0);
+  const total = lay.cols * lay.rows;
+  let index = 0;
+  for (let ry = 0; ry < lay.rows; ry++) {
+    for (let rx = 0; rx < lay.cols; rx++) {
+      index++;
+      const x0 = rx * bs;
+      const y0 = ry * bs;
+      const w = Math.min(doc.width, x0 + bs) - x0;
+      const h = Math.min(doc.height, y0 + bs) - y0;
+      const sub = subDoc(doc, x0, y0, w, h);
+      const label = boardLabel(rx, ry);
+      const cellSize = safeCellSize(w, h, opts.cellSize);
+      const canvas = renderPatternCanvas(sub, {
+        ...opts,
+        cellSize,
+        // 单块板不再画板格线，整页就是这一块
+        boardSize: 0,
+        title: `板 ${label} · 第 ${index}/${total} 块 · 第 ${y0 + 1}-${y0 + h} 行 / 第 ${x0 + 1}-${x0 + w} 列`,
+      });
+      await new Promise<void>((resolve) => {
+        canvas.toBlob((blob) => {
+          if (blob) downloadBlob(blob, `${safeFileName(doc.name)}_板${label}_${index}of${total}.png`);
+          resolve();
+        }, 'image/png');
+      });
+    }
+  }
+  return { files: total };
+}
+
+/** 一板一页导出 SVG：每块板一个 svg 文件 */
+export function exportBoardImagesSVG(doc: PatternDoc, opts: RenderOptions) {
+  const bs = Math.max(4, opts.boardSize || doc.pegboard || 29);
+  const lay = boardLayout(doc, bs, 0);
+  const total = lay.cols * lay.rows;
+  let index = 0;
+  for (let ry = 0; ry < lay.rows; ry++) {
+    for (let rx = 0; rx < lay.cols; rx++) {
+      index++;
+      const x0 = rx * bs;
+      const y0 = ry * bs;
+      const w = Math.min(doc.width, x0 + bs) - x0;
+      const h = Math.min(doc.height, y0 + bs) - y0;
+      const label = boardLabel(rx, ry);
+      const sub = subDoc(doc, x0, y0, w, h);
+      const svg = buildSVG(sub, {
+        ...opts,
+        boardSize: 0,
+        fitWindow: false,
+        title: `板 ${label} · 第 ${index}/${total} 块 · 第 ${y0 + 1}-${y0 + h} 行 / 第 ${x0 + 1}-${x0 + w} 列`,
+      });
+      downloadBlob(
+        new Blob([svg], { type: 'image/svg+xml' }),
+        `${safeFileName(doc.name)}_板${label}_${index}of${total}.svg`,
+      );
+    }
+  }
+  return { files: total };
 }
 
 export interface PdfPreviewOptions extends PdfOptions {

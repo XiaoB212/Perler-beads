@@ -70,6 +70,11 @@ export interface ViewFlags {
   symmetryY: boolean;
   progressMode: boolean;
   dimUnplaced: boolean;
+  /**
+   * 对色拼装：进度模式下先选「正在拼的色号」，点对了打勾、点错了打叉。
+   * 关掉就是原来的「随便点一下就是对号」。
+   */
+  progressCheck: boolean;
   /** 在每颗豆子上显示色号（需要放大到一定倍数才画得下） */
   showCodes: boolean;
   /** 豆子形状：方格（默认）或圆格 */
@@ -88,6 +93,7 @@ export const DEFAULT_FLAGS: ViewFlags = {
   symmetryY: false,
   progressMode: false,
   dimUnplaced: true,
+  progressCheck: false,
   showCodes: false,
   cellShape: 'square',
 };

@@ -84,10 +84,11 @@ export function clampCanvasPair(w: number, h: number): { w: number; h: number } 
   return { w: cw, h: ch };
 }
 
-/** 板格数：0 或非法值 → 0（不显示分板），否则 2 – PEGBOARD_MAX */
+/** 板格数：0 或非法值 → 0（不显示分板），否则 1 – PEGBOARD_MAX */
 export function clampPegboard(n: number): number {
   if (!Number.isFinite(n) || n <= 0) return 0;
-  return Math.min(PEGBOARD_MAX, Math.max(2, Math.round(n)));
+  // 下限是 1 而不是 2：单颗豆也能算一块「板」，用户要能填 1、十几、一百几
+  return Math.min(PEGBOARD_MAX, Math.max(1, Math.round(n)));
 }
 
 /** 板编号：行优先，A1 / B3 —— 与导出 PNG / PDF / SVG 上的编号保持一致 */

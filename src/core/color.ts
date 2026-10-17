@@ -115,15 +115,82 @@ export function buildPaletteLab(palette: BeadColor[]): PaletteLab {
   return { labs: palette.map((c) => hexToLab(c.hex)) };
 }
 
-/** 在色板中寻找最接近的颜色下标 */
+/**
+ * 在色板中寻找最接近的颜色下标。
+ *
+ * CIEDE2000 是逐格匹配的精度保证，但它的代价很高（pow / atan2 / cos），
+ * 色板有 291 色时每格要算 291 次，一张 64×64 的图就是 120 万次 —— 这就是
+ * 用户说的「转换的时候很卡」的主要来源。
+ *
+ * 所以先用 Lab 欧氏距离粗筛出最接近的 SHORTLIST 个候选，再只在候选里算 CIEDE2000。
+ * CIEDE2000 与 Lab 欧氏距离的排序高度一致，真命天子几乎必然落在这 12 个里，
+ * 精度肉眼不可分辨，耗时降到约 1/24。
+ */
+const SHORTLIST = 12;
+
 export function nearestInPalette(lab: LAB, pl: PaletteLab): number {
-  let best = 0;
+  const labs = pl.labs;
+  const n = labs.length;
+  if (n === 0) return 0;
+  if (n <= SHORTLIST) {
+    let best = 0;
+    let bestD = Infinity;
+    for (let i = 0; i < n; i++) {
+      const d = deltaE2000(lab, labs[i]);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  // 插入排序维护一个「距离最小的 K 个候选」小顶堆（K 很小，数组最合适）
+  const cand = new Int32Array(SHORTLIST);
+  const candD = new Float64Array(SHORTLIST);
+  let filled = 0;
+  for (let i = 0; i < n; i++) {
+    const c = labs[i];
+    const dl = lab.l - c.l;
+    const da = lab.a - c.a;
+    const db = lab.b - c.b;
+    const d = dl * dl + da * da + db * db;
+    if (filled < SHORTLIST) {
+      let j = filled++;
+      cand[j] = i;
+      candD[j] = d;
+      while (j > 0 && candD[j - 1] > candD[j]) {
+        const ti = cand[j - 1];
+        cand[j - 1] = cand[j];
+        cand[j] = ti;
+        const td = candD[j - 1];
+        candD[j - 1] = candD[j];
+        candD[j] = td;
+        j--;
+      }
+    } else if (d < candD[SHORTLIST - 1]) {
+      let j = SHORTLIST - 1;
+      cand[j] = i;
+      candD[j] = d;
+      while (j > 0 && candD[j - 1] > candD[j]) {
+        const ti = cand[j - 1];
+        cand[j - 1] = cand[j];
+        cand[j] = ti;
+        const td = candD[j - 1];
+        candD[j - 1] = candD[j];
+        candD[j] = td;
+        j--;
+      }
+    }
+  }
+
+  let best = cand[0];
   let bestD = Infinity;
-  for (let i = 0; i < pl.labs.length; i++) {
-    const d = deltaE2000(lab, pl.labs[i]);
+  for (let k = 0; k < filled; k++) {
+    const d = deltaE2000(lab, labs[cand[k]]);
     if (d < bestD) {
       bestD = d;
-      best = i;
+      best = cand[k];
     }
   }
   return best;

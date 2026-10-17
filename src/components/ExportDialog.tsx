@@ -6,6 +6,9 @@ import {
   DEFAULT_RENDER,
   DEFAULT_WATERMARK_TEXT,
   DEFAULT_WATERMARK_URL,
+  cellAdvice,
+  exportBoardImagesPNG,
+  exportBoardImagesSVG,
   exportCSV,
   exportPDF,
   exportPNG,
@@ -16,6 +19,7 @@ import {
   type PdfOptions,
   type RenderOptions,
 } from '../core/export';
+import { PEGBOARD_MAX, clampPegboard } from '../core/board';
 import { IconCheck, IconClose, IconDownload, IconFile, IconImage, IconSparkle } from './Icons';
 
 interface Props {
@@ -53,13 +57,24 @@ export default function ExportDialog({ onClose }: Props) {
   const [maxCellsPerPage, setMaxCellsPerPage] = useState(32);
   const [withLegend, setWithLegend] = useState(false);
   const [calibration, setCalibration] = useState(true);
-  const [boardSize, setBoardSize] = useState(0);
+  // 拼豆板尺寸：默认跟图纸自身设置一致（不再写死 64 —— 29×29 的图写 64 根本没意义）
+  const [boardSize, setBoardSize] = useState(() => doc.pegboard || 0);
+  const [boardText, setBoardText] = useState(() => String(doc.pegboard || 0));
+  const commitBoardSize = (raw: string) => {
+    setBoardText(raw);
+    if (raw.trim() === '') return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    setBoardSize(clampPegboard(n));
+  };
   // 导出件上的色号用量表与水印
   const [legend, setLegend] = useState(true);
   const [watermark, setWatermark] = useState(true);
   const [watermarkText, setWatermarkText] = useState(DEFAULT_WATERMARK_TEXT);
   const [watermarkUrl, setWatermarkUrl] = useState(DEFAULT_WATERMARK_URL);
   const [fitWindow, setFitWindow] = useState(true);
+  /** PNG / SVG：一板一张，每块板单独一个文件（6.9 万格那种大图色号才看得清） */
+  const [perBoard, setPerBoard] = useState(false);
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -122,6 +137,27 @@ export default function ExportDialog({ onClose }: Props) {
   const boardRows = boardSize > 0 ? Math.ceil(doc.height / boardSize) : 1;
   const boardTotal = boardCols * boardRows;
 
+  // 提前算好「这个设置下色号到底印不印得清」。大图（比如 264×264 ≈ 7 万格）
+  // 塞进一张 A4，每格不到 1mm，色号根本没法看 —— 与其导完才发现，不如现在就提示。
+  const advice = useMemo(
+    () =>
+      cellAdvice(doc, fmt === 'pdf' ? 'pdf' : fmt === 'svg' ? 'svg' : 'png', {
+        cellSize,
+        layout,
+        boardSize,
+        pageSize,
+        orientation,
+        coords,
+      }),
+    [doc, fmt, cellSize, layout, boardSize, pageSize, orientation, coords],
+  );
+
+  // 输出像素尺寸（分板时接缝占 1.2 格）
+  const outSpanW = boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * 1.2 : doc.width;
+  const outSpanH = boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * 1.2 : doc.height;
+  const outW = Math.round(outSpanW * cellSize);
+  const outH = Math.round(outSpanH * cellSize);
+
   // PDF 预览的页数：一板一页 = 板数；分块 = 块数；单页 = 1
   const pdfPages =
     layout === 'boards'
@@ -170,12 +206,32 @@ export default function ExportDialog({ onClose }: Props) {
 
   const doExport = () => {
     try {
-      if (fmt === 'png') exportPNG(doc, renderOpts);
-      else if (fmt === 'svg') exportSVG(doc, renderOpts);
-      else if (fmt === 'pdf') exportPDF(doc, pdfOpts);
-      else if (fmt === 'csv') exportCSV(doc);
-      else exportProject(doc);
-      notify('已开始下载');
+      if (fmt === 'png') {
+        if (perBoard && boardSize > 0 && boardTotal > 1) {
+          void exportBoardImagesPNG(doc, renderOpts);
+          notify(`已开始下载 ${boardTotal} 个 PNG（每块板一张，文件名带板号）`);
+        } else {
+          exportPNG(doc, renderOpts);
+          notify('已开始下载');
+        }
+      } else if (fmt === 'svg') {
+        if (perBoard && boardSize > 0 && boardTotal > 1) {
+          exportBoardImagesSVG(doc, renderOpts);
+          notify(`已开始下载 ${boardTotal} 个 SVG（每块板一张，文件名带板号）`);
+        } else {
+          exportSVG(doc, renderOpts);
+          notify('已开始下载');
+        }
+      } else if (fmt === 'pdf') {
+        exportPDF(doc, pdfOpts);
+        notify('已开始下载');
+      } else if (fmt === 'csv') {
+        exportCSV(doc);
+        notify('已开始下载');
+      } else {
+        exportProject(doc);
+        notify('已开始下载');
+      }
       onClose();
     } catch (err) {
       console.error(err);
@@ -305,36 +361,85 @@ export default function ExportDialog({ onClose }: Props) {
                         <input
                           type="range"
                           min={4}
-                          max={64}
+                          max={128}
+                          step={2}
                           value={cellSize}
                           onChange={(e) => setCellSize(Number(e.target.value))}
                         />
                         <span className="val">{cellSize}px</span>
                       </div>
+                      <div className="seg-row" style={{ marginTop: 6 }}>
+                        {[12, 24, 48, 80, 128].map((v) => (
+                          <button
+                            key={v}
+                            className={cellSize === v ? 'active' : ''}
+                            onClick={() => setCellSize(v)}
+                            title={v >= 48 ? '色号很清晰，但文件较大' : '色号清晰'}
+                          >
+                            {v}px
+                          </button>
+                        ))}
+                      </div>
                       <span className="hint">
-                        输出约{' '}
-                        {(boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * 1.2 : doc.width) *
-                          cellSize | 0}{' '}
-                        ×{' '}
-                        {(boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * 1.2 : doc.height) *
-                          cellSize | 0}{' '}
-                        px
+                        输出约 {outW} × {outH} px
+                        {cellSize < 14 ? ' · 这个尺寸印不下色号，想要色号至少 14px' : ''}
+                        {outW > 12000 || outH > 12000
+                          ? ' · 图很大，看图软件通常会自动缩到最小，建议改用 SVG（矢量，放大不糊）'
+                          : ''}
                       </span>
                     </div>
                   )}
                   <div className="field">
                     <label>拼豆板尺寸</label>
-                    <select className="select" value={boardSize} onChange={(e) => setBoardSize(Number(e.target.value))}>
-                      {BOARD_PRESETS.map((b) => (
-                        <option key={b.value} value={b.value}>
-                          {b.label}
-                        </option>
-                      ))}
-                    </select>
+                    <div className="slider-row">
+                      <select
+                        className="select"
+                        value={BOARD_PRESETS.some((b) => b.value === boardSize) ? boardSize : -1}
+                        onChange={(e) => {
+                          const v = Number(e.target.value);
+                          if (v < 0) return;
+                          setBoardSize(v);
+                          setBoardText(String(v));
+                        }}
+                      >
+                        {!BOARD_PRESETS.some((b) => b.value === boardSize) && (
+                          <option value={-1}>自定义 {boardSize} 格</option>
+                        )}
+                        {BOARD_PRESETS.map((b) => (
+                          <option key={b.value} value={b.value}>
+                            {b.label}
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        type="number"
+                        className="input"
+                        style={{ width: 76 }}
+                        min={0}
+                        max={PEGBOARD_MAX}
+                        value={boardText}
+                        onChange={(e) => commitBoardSize(e.target.value)}
+                        onBlur={() => setBoardText(String(boardSize))}
+                        title={`可以直接填任意 1 – ${PEGBOARD_MAX} 的整数`}
+                      />
+                      <span className="val">格</span>
+                      {doc.pegboard > 0 && boardSize !== doc.pegboard && (
+                        <button
+                          className="chip"
+                          onClick={() => {
+                            setBoardSize(clampPegboard(doc.pegboard));
+                            setBoardText(String(clampPegboard(doc.pegboard)));
+                          }}
+                          title="用图纸设置里的拼豆板分界"
+                        >
+                          跟图纸一致
+                        </button>
+                      )}
+                    </div>
                     <span className="hint">
                       {boardSize > 0
                         ? `${doc.width} × ${doc.height} 需要 ${boardCols} × ${boardRows} = ${boardTotal} 块板，导出图上会标出板框与板号`
-                        : '选一个板尺寸，导出图会按实体板切分并标出板号'}
+                        : '选一个板尺寸，导出图会按实体板切分并标出板号；填 0 表示不画分板'}
                     </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>
@@ -433,6 +538,54 @@ export default function ExportDialog({ onClose }: Props) {
                     </div>
                   )}
                 </>
+              )}
+
+              {(fmt === 'png' || fmt === 'svg' || fmt === 'pdf') && (
+                <div className={'advice-box' + (advice.legible ? ' ok' : ' warn')}>
+                  <div className="advice-main">
+                    <b>{advice.legible ? '色号看得清' : '这样导出看不清色号'}</b>
+                    <span>{advice.hint}</span>
+                  </div>
+                  {!advice.legible && (
+                    <div className="advice-actions">
+                      {fmt === 'pdf' && layout !== 'boards' && (
+                        <button className="btn sm primary" onClick={() => setLayout('boards')}>
+                          改成一板一页
+                        </button>
+                      )}
+                      {(fmt === 'png' || fmt === 'svg') && (
+                        <>
+                          {cellSize < 13 && (
+                            <button className="btn sm" onClick={() => setCellSize(16)}>
+                              单格调到 16px
+                            </button>
+                          )}
+                          {boardSize > 0 && boardTotal > 1 && (
+                            <button className="btn sm primary" onClick={() => setPerBoard(true)}>
+                              一板一张（{boardTotal} 个文件）
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  )}
+                  {(fmt === 'png' || fmt === 'svg') && (
+                    <label className="checkbox-line">
+                      <span
+                        className={'checkbox' + (perBoard ? ' on' : '')}
+                        onClick={() => setPerBoard(!perBoard)}
+                        role="checkbox"
+                        aria-checked={perBoard}
+                        tabIndex={0}
+                      >
+                        {perBoard && <IconCheck width={11} height={11} />}
+                      </span>
+                      <span onClick={() => setPerBoard(!perBoard)}>
+                        一板一张：每块板单独一个文件，文件名和图上都标好板号（当前 {boardTotal} 块板）
+                      </span>
+                    </label>
+                  )}
+                </div>
               )}
 
               {fmt === 'pdf' && (
