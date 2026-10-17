@@ -38,3 +38,8 @@ src/**/*.tmpdir/
 .env
 .env.local
 .env.*.local
+
+# 本地自动化测试脚本（含本机 Chrome 路径，不随仓库发布）
+scripts/
+.shots/
+
