@@ -1,0 +1,118 @@
+:root {
+  --bg: #0b0d16;
+  --bg-soft: #111524;
+  --panel: rgba(20, 25, 40, 0.72);
+  --panel-solid: #151a2b;
+  --panel-border: rgba(255, 255, 255, 0.08);
+  --panel-border-strong: rgba(255, 255, 255, 0.14);
+  --text: #eef2ff;
+  --text-dim: #9aa4bf;
+  --text-mute: #6b7699;
+  --accent: #ff8a3d;
+  --accent-2: #ff4d8d;
+  --accent-3: #7c5cff;
+  --accent-4: #38e08b;
+  --accent-5: #4dd4ff;
+  --grad: linear-gradient(135deg, #ff8a3d 0%, #ff4d8d 55%, #7c5cff 100%);
+  --grad-soft: linear-gradient(135deg, rgba(255, 138, 61, 0.16), rgba(124, 92, 255, 0.16));
+  --danger: #ff5c6c;
+  --ok: #38e08b;
+  --radius: 14px;
+  --radius-sm: 9px;
+  --radius-lg: 20px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-2: 0 8px 24px -8px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.3);
+  --shadow-3: 0 24px 64px -16px rgba(0, 0, 0, 0.75), 0 8px 20px -8px rgba(0, 0, 0, 0.5);
+  --glow: 0 0 0 1px rgba(255, 138, 61, 0.35), 0 6px 22px -6px rgba(255, 77, 141, 0.45);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+    'Microsoft YaHei', 'Noto Sans SC', sans-serif;
+  --mono: 'SFMono-Regular', ui-monospace, 'JetBrains Mono', Menlo, Consolas, monospace;
+  --header-h: 58px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.5;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+}
+
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 9px;
+  height: 9px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.13);
+  border-radius: 99px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.24);
+  background-clip: content-box;
+}
+
+/* 背景光晕 */
+.app-bg {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 8% -12%, rgba(255, 138, 61, 0.13), transparent 62%),
+    radial-gradient(900px 560px at 96% 4%, rgba(124, 92, 255, 0.16), transparent 60%),
+    radial-gradient(760px 520px at 60% 108%, rgba(77, 212, 255, 0.09), transparent 62%),
+    linear-gradient(180deg, #0b0d16 0%, #0a0c14 100%);
+}
+
+.app-bg::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.055) 1px, transparent 1px);
+  background-size: 26px 26px;
+  mask-image: radial-gradient(900px 600px at 50% 30%, #000 0%, transparent 78%);
+  -webkit-mask-image: radial-gradient(900px 600px at 50% 30%, #000 0%, transparent 78%);
+}
+
+::selection {
+  background: rgba(255, 138, 61, 0.32);
+}

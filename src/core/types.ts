@@ -1,0 +1,116 @@
+// 拼豆工作室 · 核心类型定义
+
+/** 豆子颜色（色号） */
+export interface BeadColor {
+  /** 稳定 id，用于跨文档引用（导出/导入工程时保留） */
+  id: string;
+  /** 品牌，如 MARD / Artkal / Perler / 自定义 */
+  brand: string;
+  /** 色号，如 A1 / S12 */
+  code: string;
+  /** 中文或英文色名 */
+  name: string;
+  /** #RRGGBB */
+  hex: string;
+  /** 是否为用户自定义 */
+  custom?: boolean;
+  /** 单价：元 / 千颗；留空则回落到图纸默认单价 */
+  price?: number;
+  /** 已有库存（颗）；用于「需补货」清单 */
+  stock?: number;
+}
+
+/** 空单元格哨兵值 */
+export const EMPTY = 0;
+
+/** 图纸文档 */
+export interface PatternDoc {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  /** 长度 = width*height，0 表示空，其余为 palette 下标 + 1 */
+  cells: Uint16Array;
+  /** 进度标记，1 = 已拼好 */
+  progress: Uint8Array;
+  /** 本文档色板 */
+  palette: BeadColor[];
+  /** 拼豆板格数（用于分板参考线），0 表示不显示 */
+  pegboard: number;
+  createdAt: number;
+  updatedAt: number;
+  notes: string;
+}
+
+export type Tool =
+  | 'pencil'
+  | 'eraser'
+  | 'bucket'
+  | 'line'
+  | 'rect'
+  | 'ellipse'
+  | 'picker'
+  | 'pan'
+  | 'move';
+
+export interface Point {
+  x: number;
+  y: number;
+}
+
+export interface ViewFlags {
+  grid: boolean;
+  rulers: boolean;
+  beadHoles: boolean;
+  pegboard: boolean;
+  symmetryX: boolean;
+  symmetryY: boolean;
+  progressMode: boolean;
+  dimUnplaced: boolean;
+}
+
+export const DEFAULT_FLAGS: ViewFlags = {
+  grid: true,
+  rulers: true,
+  beadHoles: true,
+  pegboard: true,
+  symmetryX: false,
+  symmetryY: false,
+  progressMode: false,
+  dimUnplaced: true,
+};
+
+/** 撤销快照 */
+export interface Snapshot {
+  width: number;
+  height: number;
+  cells: Uint16Array;
+  progress: Uint8Array;
+  palette: BeadColor[];
+  pegboard: number;
+}
+
+/** 工程文件（.perler.json） */
+export interface ProjectFile {
+  format: 'perler-studio';
+  version: 1;
+  exportedAt: number;
+  name: string;
+  width: number;
+  height: number;
+  pegboard: number;
+  notes: string;
+  palette: BeadColor[];
+  /** RLE 编码的单元格数据 */
+  cells: string;
+  /** RLE 编码的进度数据 */
+  progress: string;
+}
+
+export interface ColorUsage {
+  index: number;
+  color: BeadColor;
+  total: number;
+  placed: number;
+  remaining: number;
+}

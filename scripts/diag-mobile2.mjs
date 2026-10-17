@@ -1,0 +1,13 @@
+﻿import puppeteer from 'puppeteer-core';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const browser = await puppeteer.launch({ executablePath: 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', headless: 'new', args: ['--no-sandbox','--disable-gpu','--hide-scrollbars'] });
+const page = await browser.newPage();
+page.on('console', (m) => { if (m.text().startsWith('[FIT]')) console.log(m.text()); });
+await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+await page.goto('http://127.0.0.1:5173/', { waitUntil: 'domcontentloaded' });
+await page.evaluate(() => localStorage.clear());
+await page.goto('http://127.0.0.1:5173/', { waitUntil: 'networkidle2' });
+await sleep(1500);
+const z = await page.evaluate(() => document.querySelector('.zoomval')?.textContent);
+console.log('zoom label:', z);
+await browser.close();
