@@ -639,6 +639,32 @@ export default function App() {
               >
                 色号
               </button>
+              {(tool === 'pencil' || tool === 'eraser' || tool === 'line' || tool === 'rect' || tool === 'ellipse') && (
+                <span className="brush-chip" title="画笔粗细（[ 变细 / ] 变粗）">
+                  <button
+                    type="button"
+                    className="brush-step"
+                    onClick={() => setBrushSize(brushSize - 1)}
+                    disabled={brushSize <= 1}
+                    aria-label="变细"
+                  >
+                    −
+                  </button>
+                  <span className="brush-dot" aria-hidden>
+                    <i style={{ width: Math.min(16, 3 + brushSize * 2), height: Math.min(16, 3 + brushSize * 2) }} />
+                  </span>
+                  <b className="brush-num">{brushSize}</b>
+                  <button
+                    type="button"
+                    className="brush-step"
+                    onClick={() => setBrushSize(brushSize + 1)}
+                    disabled={brushSize >= 16}
+                    aria-label="变粗"
+                  >
+                    +
+                  </button>
+                </span>
+              )}
               {doc.pegboard > 0 && (
                 <>
                   <button

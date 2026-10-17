@@ -7,6 +7,8 @@ import { loadDoc, readIndex } from './storage';
 import { createDemoDoc } from './demo';
 import {
   DEFAULT_PEGBOARD,
+  ZOOM_MAX,
+  ZOOM_MIN,
   boardCols,
   boardRows,
   clampCanvasPair,
@@ -164,9 +166,11 @@ interface EditorState {
   setBrushSize: (n: number) => void;
   setShapeFill: (v: boolean) => void;
   toggleFlag: (k: keyof ViewFlags) => void;
-  setFlag: (k: keyof ViewFlags, v: boolean) => void;
+  setFlag: <K extends keyof ViewFlags>(k: K, v: ViewFlags[K]) => void;
   setZoom: (z: number) => void;
   setPan: (p: { x: number; y: number }) => void;
+  /** 增量平移（滚轮 / 惯性滚动用，基于最新状态累加，不会丢步） */
+  panBy: (dx: number, dy: number) => void;
   setHover: (h: HoverCell | null) => void;
   notify: (text: string, kind?: 'ok' | 'warn') => void;
 
@@ -205,7 +209,14 @@ interface EditorState {
   fillAll: () => void;
   clearAll: () => void;
   markAllPlaced: (v: boolean) => void;
-  applyImported: (cells: Uint16Array, palette: BeadColor[], width: number, height: number, name?: string) => void;
+  applyImported: (
+    cells: Uint16Array,
+    palette: BeadColor[],
+    width: number,
+    height: number,
+    name?: string,
+    pegboard?: number,
+  ) => void;
   markClean: () => void;
   setDocMetaList: (l: DocMeta[]) => void;
   requestFit: () => void;
@@ -242,8 +253,14 @@ export const useEditor = create<EditorState>((set, get) => ({
   setShapeFill: (v) => set({ shapeFill: v }),
   toggleFlag: (k) => set({ flags: { ...get().flags, [k]: !get().flags[k] } }),
   setFlag: (k, v) => set({ flags: { ...get().flags, [k]: v } }),
-  setZoom: (z) => set({ zoom: Math.max(1, Math.min(64, z)) }),
+  setZoom: (z) => set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)) }),
   setPan: (p) => set({ pan: p }),
+  /** 增量平移：滚轮连续触发时必须基于最新状态累加，否则用闭包里的旧 pan 会丢步、回跳 */
+  panBy: (dx, dy) => {
+    const cur = get().pan;
+    if (!dx && !dy) return;
+    set({ pan: { x: cur.x + dx, y: cur.y + dy } });
+  },
   setHover: (h) => set({ hover: h }),
   notify: (text, kind = 'ok') => {
     const id = Date.now() + Math.random();
@@ -421,15 +438,21 @@ export const useEditor = create<EditorState>((set, get) => ({
       const cy = (minY + maxY) / 2;
       const rx = Math.max(0.5, (maxX - minX) / 2);
       const ry = Math.max(0.5, (maxY - minY) / 2);
+      // 逐格判断「格心是否落在椭圆环带内」：
+      // 实心 = 落在椭圆内；描边 = 落在椭圆内且不在内缩一圈的椭圆内。
+      // 之前描边用 d > 0.55 做近似，边框宽度随半径变化，圆的四个"角"会缺格。
+      const innerRx = rx - 1;
+      const innerRy = ry - 1;
+      const inside = (x: number, y: number, ax: number, ay: number) => {
+        if (ax <= 0 || ay <= 0) return false;
+        const nx = (x - cx) / (ax + 0.5);
+        const ny = (y - cy) / (ay + 0.5);
+        return nx * nx + ny * ny <= 1;
+      };
       for (let y = minY; y <= maxY; y++) {
         for (let x = minX; x <= maxX; x++) {
-          const nx = (x - cx) / (rx + 0.5);
-          const ny = (y - cy) / (ry + 0.5);
-          const d = nx * nx + ny * ny;
-          if (d <= 1) {
-            if (shapeFill) setPx(x, y);
-            else if (d > 0.55) setPx(x, y);
-          }
+          if (!inside(x, y, rx, ry)) continue;
+          if (shapeFill || !inside(x, y, innerRx, innerRy)) setPx(x, y);
         }
       }
     }
@@ -602,7 +625,7 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ doc: { ...doc, progress, updatedAt: Date.now() }, dirty: true });
   },
 
-  applyImported: (cells, palette, width, height, name) => {
+  applyImported: (cells, palette, width, height, name, pegboard) => {
     const doc = get().doc;
     const next: PatternDoc = {
       ...doc,
@@ -613,6 +636,8 @@ export const useEditor = create<EditorState>((set, get) => ({
       cells,
       progress: new Uint8Array(width * height),
       palette,
+      // 导入时顺手把板规格定下来：用户选「小板 29」就是想按 29 格一块板拼
+      pegboard: pegboard !== undefined ? clampPegboard(pegboard) : doc.pegboard,
       updatedAt: Date.now(),
     };
     set({

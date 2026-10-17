@@ -39,7 +39,9 @@ export default function ExportDialog({ onClose }: Props) {
   const [cellSize, setCellSize] = useState(24);
   const [grid, setGrid] = useState(true);
   const [coords, setCoords] = useState(true);
-  const [holes, setHoles] = useState(true);
+  const [holes, setHoles] = useState(false);
+  // 豆子形状：默认纯方格，圆格可选
+  const [shape, setShape] = useState<'square' | 'circle'>('square');
   // 导出默认就带色号：用户之前拿到一张没有色号的图，根本没法照着拼
   const [showCodes, setShowCodes] = useState(true);
   const [background, setBackground] = useState(true);
@@ -79,6 +81,7 @@ export default function ExportDialog({ onClose }: Props) {
       watermarkText,
       watermarkUrl,
       fitWindow,
+      shape,
     }),
     [
       cellSize,
@@ -95,6 +98,7 @@ export default function ExportDialog({ onClose }: Props) {
       watermarkText,
       watermarkUrl,
       fitWindow,
+      shape,
     ],
   );
 
@@ -292,25 +296,32 @@ export default function ExportDialog({ onClose }: Props) {
             </div>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              {(fmt === 'png' || fmt === 'svg') && (
+              {(fmt === 'png' || fmt === 'svg' || fmt === 'pdf') && (
                 <>
-                  <div className="field">
-                    <label>单格像素</label>
-                    <div className="slider-row">
-                      <input
-                        type="range"
-                        min={4}
-                        max={64}
-                        value={cellSize}
-                        onChange={(e) => setCellSize(Number(e.target.value))}
-                      />
-                      <span className="val">{cellSize}px</span>
+                  {fmt !== 'pdf' && (
+                    <div className="field">
+                      <label>单格像素</label>
+                      <div className="slider-row">
+                        <input
+                          type="range"
+                          min={4}
+                          max={64}
+                          value={cellSize}
+                          onChange={(e) => setCellSize(Number(e.target.value))}
+                        />
+                        <span className="val">{cellSize}px</span>
+                      </div>
+                      <span className="hint">
+                        输出约{' '}
+                        {(boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * 1.2 : doc.width) *
+                          cellSize | 0}{' '}
+                        ×{' '}
+                        {(boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * 1.2 : doc.height) *
+                          cellSize | 0}{' '}
+                        px
+                      </span>
                     </div>
-                    <span className="hint">
-                      输出约 {(boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * 1.2 : doc.width) * cellSize | 0} ×{' '}
-                      {(boardSize > 0 ? doc.height + Math.floor((doc.height - 1) / boardSize) * 1.2 : doc.height) * cellSize | 0} px
-                    </span>
-                  </div>
+                  )}
                   <div className="field">
                     <label>拼豆板尺寸</label>
                     <select className="select" value={boardSize} onChange={(e) => setBoardSize(Number(e.target.value))}>
@@ -362,6 +373,17 @@ export default function ExportDialog({ onClose }: Props) {
                         <IconCheck width={11} height={11} />
                       </span>
                       透明背景
+                    </div>
+                  </div>
+                  <div className="field" style={{ marginTop: 2 }}>
+                    <label>豆子形状</label>
+                    <div className="segmented" style={{ alignSelf: 'flex-start' }}>
+                      <button className={shape === 'square' ? 'active' : ''} onClick={() => setShape('square')}>
+                        方格
+                      </button>
+                      <button className={shape === 'circle' ? 'active' : ''} onClick={() => setShape('circle')}>
+                        圆格
+                      </button>
                     </div>
                   </div>
                 </>
@@ -432,21 +454,6 @@ export default function ExportDialog({ onClose }: Props) {
                       {layout === 'single' && '整张图纸缩放进一张纸，一眼看全；大图会画出板框与板号'}
                       {layout === 'boards' && '按实体拼豆板切分，每块板一页，可 1:1 打印后逐块拼装'}
                       {layout === 'tile' && '按每页格数硬切，适合需要放大对照的场景'}
-                    </span>
-                  </div>
-                  <div className="field">
-                    <label>拼豆板尺寸</label>
-                    <select className="select" value={boardSize} onChange={(e) => setBoardSize(Number(e.target.value))}>
-                      {BOARD_PRESETS.map((b) => (
-                        <option key={b.value} value={b.value}>
-                          {b.label}
-                        </option>
-                      ))}
-                    </select>
-                    <span className="hint">
-                      {boardSize > 0
-                        ? `${doc.width} × ${doc.height} 需要 ${boardCols} × ${boardRows} = ${boardTotal} 块板`
-                        : '选一个板尺寸，图纸会按板切分并标出板号'}
                     </span>
                   </div>
                   <div className="field">

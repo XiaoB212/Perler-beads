@@ -5,6 +5,7 @@ import { BUILTIN_PALETTES, BRAND_LABEL, PALETTE_KEYS, palettePreset } from '../c
 import type { BeadColor } from '../core/types';
 import { IconCheck, IconClose, IconImage, IconUpload, IconWand } from './Icons';
 import { renderPatternCanvas } from '../core/export';
+import { PEGBOARD_MAX, PEGBOARD_PRESETS, clampPegboard } from '../core/board';
 
 interface Props {
   onClose: () => void;
@@ -14,12 +15,8 @@ interface Props {
 
 type Sample = 'point' | 'average';
 
-const PRESET_SIZES: { w: number; h: number; label: string }[] = [
-  { w: 29, h: 29, label: '小板' },
-  { w: 48, h: 48, label: '中板' },
-  { w: 58, h: 58, label: '双板' },
-  { w: 96, h: 96, label: '大图' },
-];
+/** 单板格数常用档：直接取拼豆板规格表，和画布设置里的分板保持一致 */
+const BOARD_SIZES = PEGBOARD_PRESETS.filter((p) => p.value > 0);
 
 export default function ImportDialog({ onClose, initialFile }: Props) {
   const doc = useEditor((s) => s.doc);
@@ -31,8 +28,14 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const [over, setOver] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  const [width, setWidth] = useState(48);
+  // 尺寸按「真实的拼豆板」来定：单板格数 × 横纵板数。
+  // 之前只有一个「画布宽度（格）」滑杆，用户拿到 64×64 的图根本不知道自己要用几块板，
+  // 预览里也没有分板线，所以才会说「完全不是按照板子数量分的」。
+  const [boardSize, setBoardSize] = useState(29);
+  const [cols, setCols] = useState(2);
+  const [rows, setRows] = useState(2);
   const [dither, setDither] = useState(0.5);
+  const [ditherMode, setDitherMode] = useState<'none' | 'fs' | 'ordered'>('fs');
   const [sample, setSample] = useState<Sample>('average');
   const [brightness, setBrightness] = useState(1);
   const [contrast, setContrast] = useState(1);
@@ -47,11 +50,8 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
 
-  const height = useMemo(() => {
-    if (!img) return width;
-    const ratio = img.naturalHeight / img.naturalWidth;
-    return Math.max(4, Math.round(width * ratio));
-  }, [img, width]);
+  const width = boardSize * cols;
+  const height = boardSize * rows;
 
   const palette: BeadColor[] = useMemo(() => {
     return useDocPalette ? doc.palette : palettePreset(brandKey);
@@ -60,13 +60,15 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   const result = useMemo(() => {
     if (!img) return null;
     try {
-      const data = sampleImage(img, width, height, sample);
+      // cover 采样：画布比例由板数锁死，宁可裁掉图片多出来的部分也不要拉扁人脸
+      const data = sampleImage(img, width, height, sample, 'cover');
       return quantizeImage(data, {
         ...DEFAULT_QUANTIZE,
         width,
         height,
         maxColors: palette.length,
         dither,
+        ditherMode,
         sample,
         brightness,
         contrast,
@@ -84,6 +86,7 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     height,
     sample,
     dither,
+    ditherMode,
     brightness,
     contrast,
     saturation,
@@ -92,7 +95,7 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     palette,
   ]);
 
-  // 预览绘制
+  // 预览绘制：带分板线，让用户一眼看到「这是几块板拼起来」
   useEffect(() => {
     const canvas = previewRef.current;
     if (!canvas || !result) return;
@@ -105,7 +108,16 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
         progress: new Uint8Array(width * height),
         palette: result.palette,
       },
-      { cellSize: 8, grid: false, coords: false, background: null, holes: false, showCodes: false, dimUnplaced: false },
+      {
+        cellSize: 8,
+        grid: false,
+        coords: false,
+        background: null,
+        holes: false,
+        showCodes: false,
+        dimUnplaced: false,
+        boardSize: boardSize > 0 ? boardSize : 0,
+      },
     );
     const maxW = 520;
     const scale = Math.min(1, maxW / tmp.width);
@@ -115,7 +127,7 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
-  }, [result, doc, width, height]);
+  }, [result, doc, width, height, boardSize]);
 
   const loadFile = useCallback((file: File) => {
     if (!file.type.startsWith('image/')) {
@@ -129,10 +141,21 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
       image.onload = () => {
         setImg(image);
         setFileName(file.name);
-        // 依据图片比例推荐画布宽度
-        const ratio = image.naturalWidth / image.naturalHeight;
-        const w = Math.max(16, Math.min(120, Math.round(ratio >= 1 ? 64 : 48)));
-        setWidth(w);
+        // 画布尺寸由「板数 × 单板格数」决定，不再按图片比例改格子数；
+        // 但可以按图片比例推荐一个板数排布，省得用户自己算，改完还能手动调。
+        const ratio = image.naturalWidth / Math.max(1, image.naturalHeight);
+        if (Number.isFinite(ratio) && ratio > 0) {
+          if (ratio >= 1.12) {
+            setRows(2);
+            setCols(Math.max(1, Math.min(8, Math.round(2 * ratio))));
+          } else if (ratio <= 0.89) {
+            setCols(2);
+            setRows(Math.max(1, Math.min(8, Math.round(2 / ratio))));
+          } else {
+            setCols(2);
+            setRows(2);
+          }
+        }
       };
       image.onerror = () => alert('图片读取失败');
       image.src = String(reader.result);
@@ -157,8 +180,8 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     if (!result) return;
     setBusy(true);
     const name = fileName.replace(/\.[^.]+$/, '') || '图片转图纸';
-    applyImported(result.cells, result.palette, width, height, name);
-    notify(`已生成 ${width}×${height} 图纸 · ${result.usedCount} 色`);
+    applyImported(result.cells, result.palette, width, height, name, boardSize);
+    notify(`已生成 ${width}×${height} 图纸 · ${cols * rows} 块 ${boardSize}×${boardSize} 板 · ${result.usedCount} 色`);
     setBusy(false);
     onClose();
   };
@@ -240,6 +263,9 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                     {width} × {height}
                   </span>
                   <span className="chip">
+                    {cols} × {rows} 块板
+                  </span>
+                  <span className="chip">
                     豆子 {result ? result.cells.reduce((a, b) => a + (b ? 1 : 0), 0) : 0} 颗
                   </span>
                 </div>
@@ -252,45 +278,96 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
               <div className="divider" />
               <div className="form-grid">
                 <div className="field">
-                  <label>画布宽度（格）</label>
+                  <label>单板格数</label>
                   <div className="slider-row">
                     <input
-                      type="range"
-                      min={8}
-                      max={160}
-                      value={width}
-                      onChange={(e) => setWidth(Number(e.target.value))}
+                      type="number"
+                      className="input"
+                      min={2}
+                      max={PEGBOARD_MAX}
+                      value={boardSize}
+                      onChange={(e) => {
+                        const v = Number(e.target.value);
+                        setBoardSize(clampPegboard(Number.isFinite(v) ? v : 29) || 29);
+                      }}
+                      style={{ width: 88 }}
                     />
-                    <span className="val">{width}</span>
+                    <span className="val">× {boardSize} 格 / 块</span>
                   </div>
-                  <div className="seg-row" style={{ marginTop: 2 }}>
-                    {PRESET_SIZES.map((p) => (
+                  <div className="seg-wrap" style={{ marginTop: 2 }}>
+                    {BOARD_SIZES.slice(0, 8).map((p) => (
                       <button
-                        key={p.w}
-                        className={'btn sm ' + (width === p.w ? 'primary' : '')}
-                        onClick={() => setWidth(p.w)}
+                        key={p.value}
+                        className={boardSize === p.value ? 'active' : ''}
+                        onClick={() => setBoardSize(p.value)}
+                        title={`每块板 ${p.value} × ${p.value} 格${p.note ? ' · ' + p.note : ''}`}
                       >
-                        {p.label} {p.w}
+                        {p.value}
                       </button>
                     ))}
                   </div>
                 </div>
 
                 <div className="field">
-                  <label>抖动（仿色）强度</label>
+                  <label>用几块板（横 × 纵）</label>
                   <div className="slider-row">
+                    <span className="val" style={{ width: 'auto' }}>横</span>
                     <input
                       type="range"
-                      min={0}
-                      max={1}
-                      step={0.05}
-                      value={dither}
-                      onChange={(e) => setDither(Number(e.target.value))}
+                      min={1}
+                      max={8}
+                      value={cols}
+                      onChange={(e) => setCols(Number(e.target.value))}
                     />
-                    <span className="val">{dither.toFixed(2)}</span>
+                    <span className="val">{cols}</span>
+                    <span className="val" style={{ width: 'auto', marginLeft: 6 }}>纵</span>
+                    <input
+                      type="range"
+                      min={1}
+                      max={8}
+                      value={rows}
+                      onChange={(e) => setRows(Number(e.target.value))}
+                    />
+                    <span className="val">{rows}</span>
                   </div>
-                  <span className="hint">高抖动可还原渐变，低抖动更干净</span>
+                  <span className="hint">
+                    {cols} × {rows} = {cols * rows} 块 {boardSize}×{boardSize} 板，合计 {width} × {height} 格
+                  </span>
                 </div>
+
+                <div className="field">
+                  <label>抖动算法</label>
+                  <div className="segmented" style={{ alignSelf: 'flex-start' }}>
+                    <button className={ditherMode === 'none' ? 'active' : ''} onClick={() => setDitherMode('none')}>
+                      无
+                    </button>
+                    <button className={ditherMode === 'fs' ? 'active' : ''} onClick={() => setDitherMode('fs')}>
+                      误差扩散
+                    </button>
+                    <button className={ditherMode === 'ordered' ? 'active' : ''} onClick={() => setDitherMode('ordered')}>
+                      有序抖动
+                    </button>
+                  </div>
+                  <span className="hint">无 = 最干净；误差扩散 = 过渡自然；有序 = 规则网纹，印刷感强</span>
+                </div>
+
+                {ditherMode !== 'none' && (
+                  <div className="field">
+                    <label>抖动强度</label>
+                    <div className="slider-row">
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={dither}
+                        onChange={(e) => setDither(Number(e.target.value))}
+                      />
+                      <span className="val">{dither.toFixed(2)}</span>
+                    </div>
+                    <span className="hint">高抖动可还原渐变，低抖动更干净</span>
+                  </div>
+                )}
 
                 <div className="field">
                   <label>采样方式</label>

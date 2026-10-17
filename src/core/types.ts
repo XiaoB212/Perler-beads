@@ -72,12 +72,16 @@ export interface ViewFlags {
   dimUnplaced: boolean;
   /** 在每颗豆子上显示色号（需要放大到一定倍数才画得下） */
   showCodes: boolean;
+  /** 豆子形状：方格（默认）或圆格 */
+  cellShape: CellShape;
 }
+
+export type CellShape = 'square' | 'circle';
 
 export const DEFAULT_FLAGS: ViewFlags = {
   grid: true,
   rulers: true,
-  beadHoles: true,
+  beadHoles: false,
   pegboard: true,
   boardIds: true,
   symmetryX: false,
@@ -85,6 +89,7 @@ export const DEFAULT_FLAGS: ViewFlags = {
   progressMode: false,
   dimUnplaced: true,
   showCodes: false,
+  cellShape: 'square',
 };
 
 /** 撤销快照 */

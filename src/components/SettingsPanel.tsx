@@ -40,6 +40,7 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
   const doc = useEditor((s) => s.doc);
   const flags = useEditor((s) => s.flags);
   const toggleFlag = useEditor((s) => s.toggleFlag);
+  const setFlag = useEditor((s) => s.setFlag);
   const brushSize = useEditor((s) => s.brushSize);
   const setBrushSize = useEditor((s) => s.setBrushSize);
   const shapeFill = useEditor((s) => s.shapeFill);
@@ -84,6 +85,35 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
             onChange={(e) => setBrushSize(Number(e.target.value))}
           />
           <span className="val">{brushSize}px</span>
+        </div>
+        <div className="seg-wrap" style={{ marginTop: 6 }}>
+          {[1, 2, 3, 5, 8, 12].map((n) => (
+            <button
+              key={n}
+              className={brushSize === n ? 'active' : ''}
+              onClick={() => setBrushSize(n)}
+            >
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="field" style={{ marginBottom: 14 }}>
+        <label>豆子形状</label>
+        <div className="segmented" style={{ alignSelf: 'flex-start' }}>
+          <button
+            className={flags.cellShape !== 'circle' ? 'active' : ''}
+            onClick={() => setFlag('cellShape', 'square')}
+          >
+            方格
+          </button>
+          <button
+            className={flags.cellShape === 'circle' ? 'active' : ''}
+            onClick={() => setFlag('cellShape', 'circle')}
+          >
+            圆格
+          </button>
         </div>
       </div>
 

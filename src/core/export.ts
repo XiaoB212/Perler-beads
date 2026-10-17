@@ -28,6 +28,8 @@ export interface RenderOptions {
   watermarkUrl?: string;
   /** SVG 打开时铺满窗口并居中显示 */
   fitWindow?: boolean;
+  /** 豆子形状：方格（默认）或圆格 */
+  shape?: 'square' | 'circle';
 }
 
 /** 默认水印文案与地址，导出面板里可以改 */
@@ -49,6 +51,7 @@ export const DEFAULT_RENDER: RenderOptions = {
   watermarkText: DEFAULT_WATERMARK_TEXT,
   watermarkUrl: DEFAULT_WATERMARK_URL,
   fitWindow: true,
+  shape: 'square',
 };
 
 /** 色号用量：按颗数从多到少排，跳过色板里没用到的项 */
@@ -170,6 +173,8 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
 
   // 格子底色
   const progressMode = opts.progressStyle === 'placed';
+  const roundCell = opts.shape === 'circle';
+  const beadR = (cs / 2) * 0.94;
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const idx = y * width + x;
@@ -183,9 +188,15 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
       const done = !progressMode || doc.progress[idx] === 1;
       ctx.globalAlpha = done ? 1 : 0.22;
       ctx.fillStyle = c.hex;
-      ctx.fillRect(px, py, cs, cs);
+      if (roundCell) {
+        ctx.beginPath();
+        ctx.arc(px + cs / 2, py + cs / 2, beadR, 0, Math.PI * 2);
+        ctx.fill();
+      } else {
+        ctx.fillRect(px, py, cs, cs);
+      }
       ctx.globalAlpha = 1;
-      if (opts.holes && cs >= 9 && !(opts.showCodes && cs >= 12)) {
+      if (opts.holes && cs >= 9 && !(opts.showCodes && cs >= 9)) {
         ctx.beginPath();
         ctx.arc(px + cs / 2, py + cs / 2, Math.max(0.8, cs * 0.13), 0, Math.PI * 2);
         ctx.fillStyle = 'rgba(255,255,255,0.62)';
@@ -194,21 +205,21 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
         ctx.lineWidth = Math.max(0.4, cs * 0.03);
         ctx.stroke();
       }
-      if (opts.showCodes && cs >= 12 && done) {
-        const fs = Math.min(cs * 0.44, 14);
-        ctx.font = `700 ${Math.round(fs)}px ui-monospace, monospace`;
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        const cx = px + cs / 2;
-        const cy = py + cs * 0.5;
-        // 色号直接印在豆子颜色上，不垫底色块，图纸才干净
-        const fg = readableTextColor(c.hex);
-        ctx.lineJoin = 'round';
-        ctx.lineWidth = Math.max(1.4, cs * 0.1);
-        ctx.strokeStyle = fg === '#12141d' ? 'rgba(255,255,255,0.8)' : 'rgba(0,0,0,0.45)';
-        ctx.strokeText(c.code, cx, cy);
-        ctx.fillStyle = fg;
-        ctx.fillText(c.code, cx, cy);
+      if (opts.showCodes && cs >= 9 && done) {
+        // 色号直接印在豆子颜色上，不垫底色块、也不描边。
+        // 描边版在 9~14px 的小字上会糊成一团（用户反馈「看起来模糊」），
+        // 所以只保留填充，字色按豆子亮度在深墨/白之间取其一。
+        const fs = Math.min(cs * 0.5, (cs * 0.88) / Math.max(1, c.code.length * 0.62), 15);
+        if (fs >= 4.6) {
+          ctx.font = `600 ${fs.toFixed(1)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          // 对齐整数像素，避免 Canvas 对小字号做灰度插值
+          const cx = Math.round(px + cs / 2);
+          const cy = Math.round(py + cs / 2);
+          ctx.fillStyle = readableTextColor(c.hex);
+          ctx.fillText(c.code, cx, cy);
+        }
       }
     }
   }
@@ -231,24 +242,45 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     ctx.stroke();
   }
 
-  // 分板：每块板单独描边 + 板号
+  // 分板：只在板与板的接缝画一条稍深的细线，板号用低调的灰字。
+  // 以前每块板都描一圈橙色框 + 橙色板号，256 块板时整张图像铺满橙色网格，
+  // 用户直接说「人家 81 块板就那么好看了，我们 256 块板就这样」。
   if (bs > 0) {
-    for (let ry = 0; ry < lay.rows; ry++) {
-      for (let rx = 0; rx < lay.cols; rx++) {
-        const gx = rx * (bs + gap);
-        const gy = ry * (bs + gap);
-        const bw = Math.min(bs, width - rx * bs) * cs;
-        const bh = Math.min(bs, height - ry * bs) * cs;
-        const px = padLeft + gx * cs;
-        const py = padTop + gy * cs;
-        ctx.strokeStyle = 'rgba(217,84,30,0.85)';
-        ctx.lineWidth = 1.4;
-        ctx.strokeRect(px - 0.5, py - 0.5, bw + 1, bh + 1);
-        ctx.fillStyle = 'rgba(217,84,30,0.95)';
-        ctx.font = `700 ${Math.max(7, Math.min(11, cs * 0.55))}px ui-monospace, monospace`;
-        ctx.textAlign = 'left';
-        ctx.textBaseline = 'top';
-        ctx.fillText(boardLabel(rx, ry), px + 2, py + 2);
+    ctx.strokeStyle = 'rgba(40,44,54,0.42)';
+    ctx.lineWidth = Math.max(1, cs * 0.06);
+    ctx.beginPath();
+    for (let rx = 1; rx < lay.cols; rx++) {
+      const px = padLeft + rx * (bs + gap) * cs - (gap * cs) / 2;
+      ctx.moveTo(px, padTop);
+      ctx.lineTo(px, padTop + gridH);
+    }
+    for (let ry = 1; ry < lay.rows; ry++) {
+      const py = padTop + ry * (bs + gap) * cs - (gap * cs) / 2;
+      ctx.moveTo(padLeft, py);
+      ctx.lineTo(padLeft + gridW, py);
+    }
+    ctx.stroke();
+    ctx.strokeStyle = 'rgba(40,44,54,0.62)';
+    ctx.lineWidth = Math.max(1.2, cs * 0.08);
+    ctx.strokeRect(padLeft, padTop, gridW, gridH);
+
+    // 板号：只在格够大时画，灰色小字，压在豆子上也读得清
+    const bfs = Math.max(8, Math.min(13, cs * 0.5));
+    if (bfs >= 8 && cs >= 7) {
+      ctx.font = `600 ${bfs.toFixed(1)}px ui-monospace, monospace`;
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'top';
+      for (let ry = 0; ry < lay.rows; ry++) {
+        for (let rx = 0; rx < lay.cols; rx++) {
+          const px = padLeft + rx * (bs + gap) * cs + 2;
+          const py = padTop + ry * (bs + gap) * cs + 1.5;
+          const label = boardLabel(rx, ry);
+          ctx.lineWidth = 3;
+          ctx.strokeStyle = 'rgba(255,255,255,0.72)';
+          ctx.strokeText(label, px, py);
+          ctx.fillStyle = 'rgba(60,64,74,0.72)';
+          ctx.fillText(label, px, py);
+        }
       }
     }
   } else if (opts.grid) {
@@ -438,17 +470,27 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
       // 按进度上色：已拼保持原色，未拼淡化
       const done = !progressModeSvg || doc.progress[idx] === 1;
       const op = done ? '' : ' fill-opacity="0.22"';
-      out.push(`<rect x="${px}" y="${py}" width="${cs}" height="${cs}" fill="${c.hex}"${op}/>`);
-      if (opts.holes && cs >= 8 && !(opts.showCodes && cs >= 12)) {
+      if (opts.shape === 'circle') {
+        const r = (cs / 2) * 0.94;
+        out.push(
+          `<circle cx="${(px + cs / 2).toFixed(2)}" cy="${(py + cs / 2).toFixed(2)}" r="${r.toFixed(2)}" fill="${c.hex}"${op}/>`,
+        );
+      } else {
+        out.push(`<rect x="${px}" y="${py}" width="${cs}" height="${cs}" fill="${c.hex}"${op}/>`);
+      }
+      if (opts.holes && cs >= 8 && !(opts.showCodes && cs >= 9)) {
         out.push(
           `<circle cx="${px + cs / 2}" cy="${py + cs / 2}" r="${(cs * 0.13).toFixed(2)}" fill="#ffffff" fill-opacity="${done ? 0.62 : 0.14}"/>`,
         );
       }
-      if (opts.showCodes && cs >= 12 && done) {
-        // 色号直接印在豆子上，不垫底块；深色豆子用浅字、浅色豆子用深字
-        out.push(
-          `<text x="${px + cs / 2}" y="${py + cs / 2 + cs * 0.16}" text-anchor="middle" font-size="${Math.min(cs * 0.44, 14).toFixed(1)}" font-weight="700" font-family="ui-monospace,monospace" fill="${inkFor(c.hex)}" stroke="${inkFor(c.hex) === '#ffffff' ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.8)'}" stroke-width="${Math.max(1, cs * 0.06).toFixed(2)}" paint-order="stroke" stroke-linejoin="round">${escapeXml(c.code)}</text>`,
-        );
+      if (opts.showCodes && cs >= 9 && done) {
+        // 纯填充，不做描边：小字号描边会糊成一团，用户反馈「看起来很模糊」
+        const fs = Math.min(cs * 0.5, (cs * 0.88) / Math.max(1, c.code.length * 0.62), 15);
+        if (fs >= 4.6) {
+          out.push(
+            `<text x="${(px + cs / 2).toFixed(2)}" y="${(py + cs / 2 + fs * 0.34).toFixed(2)}" text-anchor="middle" font-size="${fs.toFixed(1)}" font-weight="600" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" fill="${inkFor(c.hex)}">${escapeXml(c.code)}</text>`,
+          );
+        }
       }
     }
   }
@@ -465,30 +507,35 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
     }
     out.push(`</g>`);
   }
-  // 分板框 + 板号
+  // 分板：只在接缝画细线 + 灰色板号（同 PNG 的克制画法）
   if (bs > 0) {
-    out.push(`<g id="boards" fill="none" stroke="rgba(217,84,30,0.9)" stroke-width="1.4">`);
-    for (let ry = 0; ry < lay.rows; ry++) {
-      for (let rx = 0; rx < lay.cols; rx++) {
-        const bw = Math.min(bs, width - rx * bs) * cs;
-        const bh = Math.min(bs, height - ry * bs) * cs;
-        const px = padLeft + rx * (bs + gap) * cs;
-        const py = padTop + ry * (bs + gap) * cs;
-        out.push(`<rect x="${px}" y="${py}" width="${bw}" height="${bh}"/>`);
-      }
+    out.push(`<g id="boards" fill="none" stroke="rgba(40,44,54,0.42)" stroke-width="${Math.max(1, cs * 0.06).toFixed(2)}">`);
+    for (let rx = 1; rx < lay.cols; rx++) {
+      const px = padLeft + rx * (bs + gap) * cs - (gap * cs) / 2;
+      out.push(`<line x1="${px}" y1="${padTop}" x2="${px}" y2="${padTop + gridH}"/>`);
+    }
+    for (let ry = 1; ry < lay.rows; ry++) {
+      const py = padTop + ry * (bs + gap) * cs - (gap * cs) / 2;
+      out.push(`<line x1="${padLeft}" y1="${py}" x2="${padLeft + spanW * cs}" y2="${py}"/>`);
     }
     out.push(`</g>`);
     out.push(
-      `<g id="board-labels" fill="rgba(217,84,30,0.95)" font-size="${Math.max(7, Math.min(11, cs * 0.55))}" font-weight="700">`,
+      `<rect x="${padLeft}" y="${padTop}" width="${spanW * cs}" height="${gridH}" fill="none" stroke="rgba(40,44,54,0.62)" stroke-width="${Math.max(1.2, cs * 0.08).toFixed(2)}"/>`,
     );
-    for (let ry = 0; ry < lay.rows; ry++) {
-      for (let rx = 0; rx < lay.cols; rx++) {
-        const px = padLeft + rx * (bs + gap) * cs;
-        const py = padTop + ry * (bs + gap) * cs;
-        out.push(`<text x="${px + 2}" y="${py + Math.max(7, Math.min(11, cs * 0.55)) + 2}">${boardLabel(rx, ry)}</text>`);
+    const bfs = Math.max(8, Math.min(13, cs * 0.5));
+    if (cs >= 7) {
+      out.push(
+        `<g id="board-labels" font-size="${bfs.toFixed(1)}" font-weight="600" paint-order="stroke" stroke="#ffffff" stroke-opacity="0.72" stroke-width="3">`,
+      );
+      for (let ry = 0; ry < lay.rows; ry++) {
+        for (let rx = 0; rx < lay.cols; rx++) {
+          const px = padLeft + rx * (bs + gap) * cs + 2;
+          const py = padTop + ry * (bs + gap) * cs + 1.5 + bfs;
+          out.push(`<text x="${px}" y="${py}" fill="rgba(60,64,74,0.72)">${boardLabel(rx, ry)}</text>`);
+        }
       }
+      out.push(`</g>`);
     }
-    out.push(`</g>`);
   }
   if (opts.coords) {
     out.push(`<g id="coords" fill="rgba(0,0,0,0.55)" font-size="${Math.max(7, Math.min(11, cs * 0.62))}">`);
@@ -551,9 +598,10 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
     out.push(
       `<text x="${pad}" y="${cursorY + wmH * 0.68}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.5)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}</text>`,
     );
-    // 用 <a> 包住地址，SVG 在浏览器里打开可以直接点
+    // 用 <a> 包住整段（署名 + 地址），SVG 在浏览器里打开可以直接点开项目。
+    // 不再用蓝色、不再加下划线，整段同色，和图纸本身保持安静。
     out.push(
-      `<a href="${escapeXml(url)}" target="_blank" rel="noopener"><text x="${w - pad}" y="${cursorY + wmH * 0.68}" font-size="${8 * s}" fill="rgba(0,0,0,0.42)" text-anchor="end" text-decoration="underline">${escapeXml(url.replace(/^https?:\/\//, ''))}</text></a>`,
+      `<a href="${escapeXml(url)}" target="_blank" rel="noopener"><text x="${pad}" y="${cursorY + wmH * 0.68}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.38)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}  ${escapeXml(url.replace(/^https?:\/\//, ''))}</text></a>`,
     );
     out.push(`</g>`);
   }
@@ -596,7 +644,8 @@ export const DEFAULT_PDF: Omit<PdfOptions, 'title'> = {
   withHeader: true,
   calibration: true,
   cellSize: 16,
-  showCodes: false,
+  // 图纸默认就印色号：用户拿到 PDF 是要照着拼的，没色号等于废纸
+  showCodes: true,
 };
 
 function usageOf(doc: PatternDoc) {
@@ -690,15 +739,20 @@ function pdfDrawPattern(
       const py = gridY + (lay.y[y] - oy) * cell;
       const done = !progressModePdf || doc.progress[idx] === 1;
       pdf.setFillColor(r, g, b);
-      pdf.rect(px, py, cell, cell, 'F');
+      if (opts.shape === 'circle') {
+        pdf.circle(px + cell / 2, py + cell / 2, cell * 0.47, 'F');
+      } else {
+        pdf.rect(px, py, cell, cell, 'F');
+      }
       if (!done) {
         // 未拼的盖一层白纱，打印出来明显比已拼的淡
         pdf.setFillColor(255, 255, 255);
         pdf.setGState(new (pdf as any).GState({ opacity: 0.72 }));
-        pdf.rect(px, py, cell, cell, 'F');
+        if (opts.shape === 'circle') pdf.circle(px + cell / 2, py + cell / 2, cell * 0.47, 'F');
+        else pdf.rect(px, py, cell, cell, 'F');
         pdf.setGState(new (pdf as any).GState({ opacity: 1 }));
       }
-      if (opts.showCodes && cell >= 3.6 && done) {
+      if (opts.showCodes && cell >= 2.8 && done) {
         // 色号直接印在豆子上，不垫白底块
         const fs = Math.min(cell * 0.46, 3.4);
         pdf.setFont('helvetica', 'bold');
@@ -740,24 +794,37 @@ function pdfDrawPattern(
     }
   }
 
-  // 分板框 + 板号
+  // 分板：接缝细线 + 灰色板号（不再逐块描橙色框）
   if (bs > 0) {
+    if (opts.grid) {
+      pdf.setDrawColor(78, 82, 94);
+      pdf.setLineWidth(0.22);
+      for (let rx = 1; rx < lay.cols; rx++) {
+        const px = gridX + (rx * (bs + gap) * cell - (gap * cell) / 2) - (ox * cell);
+        if (px < gridX - 0.5 || px > gridX + cw * cell + 0.5) continue;
+        pdf.line(px, gridY, px, gridY + chh * cell);
+      }
+      for (let ry = 1; ry < lay.rows; ry++) {
+        const py = gridY + (ry * (bs + gap) * cell - (gap * cell) / 2) - (oy * cell);
+        if (py < gridY - 0.5 || py > gridY + chh * cell + 0.5) continue;
+        pdf.line(gridX, py, gridX + cw * cell, py);
+      }
+    }
+    pdf.setDrawColor(78, 82, 94);
+    pdf.setLineWidth(0.3);
+    pdf.rect(gridX, gridY, cw * cell, chh * cell, 'S');
+    pdf.setFont('helvetica', 'bold');
+    pdf.setFontSize(Math.max(4.5, Math.min(8, cell * 0.5)));
+    pdf.setTextColor(96, 100, 112);
     for (let ry = 0; ry < lay.rows; ry++) {
       for (let rx = 0; rx < lay.cols; rx++) {
         const bx0 = rx * bs;
         const by0 = ry * bs;
         if (bx0 >= x1 || by0 >= y1 || bx0 + bs <= x0 || by0 + bs <= y0) continue;
-        const bw = Math.min(bs, doc.width - bx0) * cell;
-        const bh = Math.min(bs, doc.height - by0) * cell;
-        const px = gridX + (lay.x[bx0] - ox) * cell;
-        const py = gridY + (lay.y[by0] - oy) * cell;
-        pdf.setDrawColor(217, 84, 30);
-        pdf.setLineWidth(0.45);
-        pdf.rect(px, py, bw, bh, 'S');
-        pdf.setFont('helvetica', 'bold');
-        pdf.setFontSize(Math.max(5, Math.min(9, cell * 0.62)));
-        pdf.setTextColor(217, 84, 30);
-        pdf.text(boardLabel(rx, ry), px + 0.8, py + Math.max(3.2, cell * 0.6));
+        const px = gridX + (lay.x[bx0] - ox) * cell + 0.7;
+        const py = gridY + (lay.y[by0] - oy) * cell + Math.max(2.6, cell * 0.55);
+        if (cell < 2.2) continue;
+        pdf.text(boardLabel(rx, ry), px, py);
       }
     }
   } else {
@@ -802,24 +869,19 @@ function pdfFooter(pdf: jsPDF, opts: PdfOptions, pw: number, ph: number, margin:
       color: [90, 90, 105],
     });
   }
-  // 水印：一行文字 + 可点击的项目地址（PDF 阅读器里点地址会打开浏览器）
+  // 水印：一行淡灰小字 + 项目地址，和署名同一行、同一种灰，不加蓝、不加下划线，不抢眼。
   if (opts.watermark) {
     const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
     const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
     const wmY = opts.calibration ? footY - 5.4 : footY;
-    // 先量一下这段中文有多宽，再把可点击的地址紧接在后面，避免两段文字叠在一起
-    const textW = pdfTextSafe(pdf, text, margin, wmY, { sizeMm: 2.4, color: [120, 120, 136] });
-    const linkX = margin + textW + 2;
+    const textW = pdfTextSafe(pdf, text, margin, wmY, { sizeMm: 2.3, color: [150, 150, 164] });
     pdf.setFont('helvetica', 'normal');
-    pdf.setFontSize(6.4);
-    pdf.setTextColor(96, 132, 196);
+    pdf.setFontSize(6);
+    pdf.setTextColor(150, 150, 164);
     const short = url.replace(/^https?:\/\//, '');
-    // textWithLink 让导出的 PDF 里这行字可以直接点开
-    pdf.textWithLink(short, linkX, wmY, { url, align: 'left' });
-    pdf.setDrawColor(150, 175, 215);
-    pdf.setLineWidth(0.15);
-    const tw = pdf.getTextWidth(short);
-    pdf.line(linkX, wmY + 0.5, linkX + tw, wmY + 0.5);
+    // 地址直接接在署名后面、同一种淡灰（不加蓝、不加下划线），但仍然是一个可点的链接——
+    // 用户明确要求「导出的 PDF 能直接点击跳转」，所以必须走 textWithLink 而不是 text。
+    pdf.textWithLink(short, margin + textW + 2, wmY, { url, align: 'left' });
   }
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(6.5);
@@ -1177,28 +1239,20 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   ctx.font = `400 ${Math.round(M(2.3))}px ui-monospace, monospace`;
   ctx.fillText('Perler Studio', M(pw - margin), footY + M(0.6));
 
-  // 水印：预览里同样画出来，导出与预览保持一致
+  // 水印：预览里同样画出来，导出与预览保持一致。
+  // 整行用同一种淡灰、不再用蓝色、不再加下划线，避免抢了图纸本身的视线。
   if (opts.watermark) {
     const text = opts.watermarkText || DEFAULT_WATERMARK_TEXT;
     const url = opts.watermarkUrl || DEFAULT_WATERMARK_URL;
     const wmY = opts.calibration ? footY - M(5.4) : footY;
     ctx.textAlign = 'left';
-    ctx.fillStyle = '#787888';
+    ctx.fillStyle = '#8b8b99';
     ctx.font = `400 ${Math.round(M(2.4) * 1.3)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
     ctx.fillText(text, M(margin), wmY);
     const tw = ctx.measureText(text).width;
-    ctx.fillStyle = '#6084c4';
-    ctx.font = `400 ${Math.round(M(2.3) * 1.3)}px ui-monospace, monospace`;
-    const x2 = M(margin) + tw + M(4);
     const short = url.replace(/^https?:\/\//, '');
-    ctx.fillText(short, x2, wmY);
-    const uw = ctx.measureText(short).width;
-    ctx.strokeStyle = '#96afd7';
-    ctx.lineWidth = 0.8;
-    ctx.beginPath();
-    ctx.moveTo(x2, wmY + 1.2);
-    ctx.lineTo(x2 + uw, wmY + 1.2);
-    ctx.stroke();
+    ctx.font = `400 ${Math.round(M(2.3) * 1.3)}px ui-monospace, monospace`;
+    ctx.fillText('  ' + short, M(margin) + tw, wmY);
     ctx.textAlign = 'left';
   }
 

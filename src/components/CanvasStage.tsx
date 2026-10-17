@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor, bresenham } from '../core/store';
 import { stageColors, type ResolvedTheme } from '../core/theme';
 import { readableTextColor } from '../core/color';
-import { boardGuideLines, boardLabel, focusRect } from '../core/board';
+import { ZOOM_MAX, ZOOM_MIN, boardGuideLines, boardLabel, focusRect } from '../core/board';
 import type { PatternDoc } from '../core/types';
 
 interface Props {
@@ -11,6 +11,13 @@ interface Props {
 }
 
 type DragMode = 'paint' | 'erase' | 'pan' | 'shape' | 'progress' | null;
+
+/**
+ * 单格像素（= zoom）的上下限来自 core/board.ts，和 store.setZoom 共用同一对常量。
+ * 上限 220 是为了让「分板聚焦」能把一块 4×4 的小板真正铺满视口。
+ */
+const CELL_MIN = ZOOM_MIN;
+const CELL_MAX = ZOOM_MAX;
 
 /** 圆角矩形路径（兼容不支持 ctx.roundRect 的浏览器） */
 function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
@@ -38,6 +45,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const colorIndex = useEditor((s) => s.colorIndex);
   const brushSize = useEditor((s) => s.brushSize);
   const flags = useEditor((s) => s.flags);
+  const shapeFill = useEditor((s) => s.shapeFill);
   const zoom = useEditor((s) => s.zoom);
   const pan = useEditor((s) => s.pan);
   const hover = useEditor((s) => s.hover);
@@ -46,6 +54,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
   const setFocus = useEditor((s) => s.setFocus);
   const setZoom = useEditor((s) => s.setZoom);
   const setPan = useEditor((s) => s.setPan);
+  const panBy = useEditor((s) => s.panBy);
   const setHover = useEditor((s) => s.setHover);
   const setColorIndex = useEditor((s) => s.setColorIndex);
   const notify = useEditor((s) => s.notify);
@@ -126,7 +135,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     const padY = h < 560 ? 96 : 72;
     const fit = Math.min((w - padX) / s.doc.width, (h - padY) / s.doc.height);
     if (fit <= 0) return;
-    const next = Math.max(2, Math.min(48, fit));
+    const next = Math.max(CELL_MIN, Math.min(CELL_MAX, fit));
     if (!grow && next >= s.zoom) return;
     s.setZoom(next);
     s.setPan({ x: 0, y: 0 });
@@ -143,6 +152,31 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     // 依赖里带上容器尺寸：移动端首次测量为 0 时这里会提前返回，
     // 必须等 ResizeObserver 给出真实尺寸后再算一次，否则手机上会裁掉图纸。
   }, [doc.id, doc.width, doc.height, size.w, size.h, fitToStage]);
+
+  // 聚焦某一块板：把那块板铺满整个视口。
+  // 之前只是把视口平移过去，格子大小不变，于是「一块板还是只占中间一小块」——
+  // 用户分板本来就是为了「一次只看一块、放大到好看」，所以这里重新算缩放并居中。
+  useEffect(() => {
+    const { w, h } = sizeRef.current;
+    if (!w || !h) return;
+    const s = useEditor.getState();
+    if (!focus || doc.pegboard <= 0) {
+      manualZoomRef.current = false;
+      fitToStage(true);
+      return;
+    }
+    const fr = focusRect(focus, doc.width, doc.height);
+    const padX = w < 700 ? 32 : 88;
+    const padY = h < 560 ? 104 : 88;
+    const fit = Math.min((w - padX) / fr.w, (h - padY) / fr.h);
+    const next = Math.max(CELL_MIN, Math.min(CELL_MAX, fit));
+    manualZoomRef.current = true;
+    s.setZoom(next);
+    s.setPan({
+      x: (doc.width / 2 - (fr.x + fr.w / 2)) * next,
+      y: (doc.height / 2 - (fr.y + fr.h / 2)) * next,
+    });
+  }, [focus, doc.pegboard, doc.width, doc.height, size.w, size.h, fitToStage]);
 
   // ===== 主画布绘制 =====
   useEffect(() => {
@@ -196,13 +230,26 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     const codeCells: { x: number; y: number; code: string; hex: string; dim: boolean }[] = [];
     const emptyEven = new Path2D();
     const emptyOdd = new Path2D();
+    // 豆子形状：方格（默认）或圆格。圆格要留一点缝，不然相邻圆会粘连成一片。
+    const roundCell = flags.cellShape === 'circle';
+    const beadR = (step / 2) * 0.94;
+    const addCell = (p: Path2D, px: number, py: number) => {
+      if (roundCell) {
+        const cx = px + step / 2;
+        const cy = py + step / 2;
+        p.moveTo(cx + beadR, cy);
+        p.arc(cx, cy, beadR, 0, Math.PI * 2);
+      } else {
+        p.rect(px, py, step, step);
+      }
+    };
     for (let y = vy0; y <= vy1; y++) {
       for (let x = vx0; x <= vx1; x++) {
         const px = originX + x * cell;
         const py = originY + y * cell;
         const v = doc.cells[y * doc.width + x];
         if (!v) {
-          ((x + y) % 2 === 0 ? emptyEven : emptyOdd).rect(px, py, step, step);
+          if (!roundCell) addCell((x + y) % 2 === 0 ? emptyEven : emptyOdd, px, py);
           continue;
         }
         const c = doc.palette[v - 1];
@@ -215,7 +262,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
           p = new Path2D();
           bucket.set(c.hex, p);
         }
-        p.rect(px, py, step, step);
+        addCell(p, px, py);
         if (drawHoles) {
           const hx = px + cell / 2;
           const hy = py + cell / 2;
@@ -255,19 +302,20 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     if (drawCodes && codeCells.length) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.font = `700 ${Math.round(Math.min(cell * 0.46, 14))}px ui-monospace, monospace`;
-      ctx.lineJoin = 'round';
       for (const cc of codeCells) {
+        // 字号两层约束：不超过格子的 52%，也不超过格宽能容纳的宽度。
+        // 之前用描边（strokeText）给色号做外发光，1.6px 的描边把 5~6px 的字整个糊掉了，
+        // 看上去就是一团发虚的色块 —— 所以这里改回纯填充，字色按豆子底色取黑或白。
+        const fs = Math.min(cell * 0.52, (cell * 0.9) / Math.max(1, cc.code.length * 0.62));
+        if (fs < 5.5) continue;
+        ctx.font = `600 ${fs.toFixed(1)}px ui-monospace, SFMono-Regular, Menlo, monospace`;
+        // 对齐到整数像素，半像素会让 canvas 做灰度插值，小字号必然发虚
+        const cx = Math.round(cc.x + cell / 2);
         // 有中孔时色号压在下半个豆子上，避免被孔挡住
-        const ty = cc.y + cell * (drawHoles ? 0.72 : 0.52);
-        const fg = readableTextColor(cc.hex);
-        // 深色字配浅描边、浅色字配深描边，中灰的豆子上也读得清
-        ctx.strokeStyle = fg === '#12141d' ? 'rgba(255,255,255,0.85)' : 'rgba(0,0,0,0.5)';
-        ctx.lineWidth = Math.max(1.6, cell * 0.1);
-        ctx.globalAlpha = cc.dim ? 0.75 : 1;
-        ctx.strokeText(cc.code, cc.x + cell / 2, ty);
-        ctx.fillStyle = fg;
-        ctx.fillText(cc.code, cc.x + cell / 2, ty);
+        const ty = Math.round(cc.y + cell * (drawHoles ? 0.7 : 0.52));
+        ctx.globalAlpha = cc.dim ? 0.72 : 1;
+        ctx.fillStyle = readableTextColor(cc.hex);
+        ctx.fillText(cc.code, cx, ty);
       }
       ctx.globalAlpha = 1;
     }
@@ -338,31 +386,22 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
       }
       ctx.stroke();
 
-      // 板边界：奇偶交替实线 / 虚线，方便一眼数清第几块板
+      // 板边界：一条干净的实线（以前是奇偶交替实线/虚线，几百块板时满屏橙色
+      // 虚线非常刺眼，参考站只在板边界画一条细一点的深色线）
       ctx.strokeStyle = C.pegboard;
-      let edgeIndex = 0;
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
       for (let x = bs; x < doc.width; x += bs) {
         const px = Math.round(originX + x * cell) + 0.5;
-        ctx.beginPath();
-        ctx.lineWidth = 1.8;
-        ctx.setLineDash(edgeIndex % 2 === 0 ? [] : [5, 4]);
         ctx.moveTo(px, originY);
         ctx.lineTo(px, originY + boardH);
-        ctx.stroke();
-        edgeIndex++;
       }
-      edgeIndex = 0;
       for (let y = bs; y < doc.height; y += bs) {
         const py = Math.round(originY + y * cell) + 0.5;
-        ctx.beginPath();
-        ctx.lineWidth = 1.8;
-        ctx.setLineDash(edgeIndex % 2 === 0 ? [] : [5, 4]);
         ctx.moveTo(originX, py);
         ctx.lineTo(originX + boardW, py);
-        ctx.stroke();
-        edgeIndex++;
       }
-      ctx.setLineDash([]);
+      ctx.stroke();
 
       // 板号 A1 / B2：格够大才画，否则糊成一团
       if (flags.boardIds && cell >= 9) {
@@ -381,7 +420,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
             ctx.lineWidth = 3;
             ctx.strokeStyle = C.board;
             ctx.strokeText(label, px, py);
-            ctx.fillStyle = C.pegboard;
+            ctx.fillStyle = C.ruler;
             ctx.fillText(label, px, py);
           }
         }
@@ -487,15 +526,90 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
 
     if (shapePreview) {
       const { x0, y0, x1, y1 } = shapePreview;
-      const minX = Math.min(x0, x1);
-      const minY = Math.min(y0, y1);
-      const w = Math.abs(x1 - x0) + 1;
-      const h = Math.abs(y1 - y0) + 1;
-      ctx.fillStyle = theme === 'light' ? 'rgba(217,84,30,0.16)' : 'rgba(255,138,76,0.2)';
-      ctx.fillRect(originX + minX * cell, originY + minY * cell, w * cell, h * cell);
-      ctx.strokeStyle = theme === 'light' ? 'rgba(217,84,30,0.9)' : 'rgba(255,168,110,0.95)';
-      ctx.lineWidth = 1.6;
-      ctx.strokeRect(originX + minX * cell + 0.5, originY + minY * cell + 0.5, w * cell - 1, h * cell - 1);
+      const minX = Math.max(0, Math.min(x0, x1));
+      const maxX = Math.min(doc.width - 1, Math.max(x0, x1));
+      const minY = Math.max(0, Math.min(y0, y1));
+      const maxY = Math.min(doc.height - 1, Math.max(y0, y1));
+      // 预览必须画「将要落下的那些格子」，而不是一个包围盒。
+      // 以前无论直线/矩形/椭圆都只画同一个半透明方框，看起来就像「直线是方格、椭圆是长方形的」。
+      const fill = theme === 'light' ? 'rgba(217,84,30,0.30)' : 'rgba(255,138,76,0.34)';
+      const edge = theme === 'light' ? 'rgba(217,84,30,0.95)' : 'rgba(255,168,110,0.98)';
+
+      // 这里复用和 store.drawShape / drawLine 完全一致的判定，保证「预览所见 = 落笔所得」
+      const hits: [number, number][] = [];
+      if (tool === 'line') {
+        for (const [x, y] of bresenham(x0, y0, x1, y1)) {
+          if (inBounds(x, y)) hits.push([x, y]);
+        }
+      } else if (tool === 'rect') {
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            if (shapeFill || x === minX || x === maxX || y === minY || y === maxY) hits.push([x, y]);
+          }
+        }
+      } else {
+        const cx = (minX + maxX) / 2;
+        const cy = (minY + maxY) / 2;
+        const rx = Math.max(0.5, (maxX - minX) / 2);
+        const ry = Math.max(0.5, (maxY - minY) / 2);
+        const innerRx = rx - 1;
+        const innerRy = ry - 1;
+        const inside = (x: number, y: number, ax: number, ay: number) => {
+          if (ax <= 0 || ay <= 0) return false;
+          const nx = (x - cx) / (ax + 0.5);
+          const ny = (y - cy) / (ay + 0.5);
+          return nx * nx + ny * ny <= 1;
+        };
+        for (let y = minY; y <= maxY; y++) {
+          for (let x = minX; x <= maxX; x++) {
+            if (!inside(x, y, rx, ry)) continue;
+            if (shapeFill || !inside(x, y, innerRx, innerRy)) hits.push([x, y]);
+          }
+        }
+      }
+
+      // 格子多的时候逐格描边会糊成一片，改画整块填充 + 外轮廓
+      const area = (maxX - minX + 1) * (maxY - minY + 1);
+      const dense = hits.length > 900 || area > 2500;
+      ctx.fillStyle = fill;
+      for (const [x, y] of hits) {
+        ctx.fillRect(originX + x * cell, originY + y * cell, cell, cell);
+      }
+      ctx.strokeStyle = edge;
+      ctx.lineWidth = 1.4;
+      if (dense) {
+        ctx.strokeRect(
+          originX + minX * cell + 0.5,
+          originY + minY * cell + 0.5,
+          (maxX - minX + 1) * cell - 1,
+          (maxY - minY + 1) * cell - 1,
+        );
+      } else {
+        // 只描边「边缘格」：逐格描满会显得糊，只勾外圈更清楚
+        const set = new Set(hits.map(([x, y]) => `${x},${y}`));
+        for (const [x, y] of hits) {
+          const px = originX + x * cell;
+          const py = originY + y * cell;
+          ctx.beginPath();
+          if (!set.has(`${x},${y - 1}`)) {
+            ctx.moveTo(px, py + 0.5);
+            ctx.lineTo(px + cell, py + 0.5);
+          }
+          if (!set.has(`${x},${y + 1}`)) {
+            ctx.moveTo(px, py + cell - 0.5);
+            ctx.lineTo(px + cell, py + cell - 0.5);
+          }
+          if (!set.has(`${x - 1},${y}`)) {
+            ctx.moveTo(px + 0.5, py);
+            ctx.lineTo(px + 0.5, py + cell);
+          }
+          if (!set.has(`${x + 1},${y}`)) {
+            ctx.moveTo(px + cell - 0.5, py);
+            ctx.lineTo(px + cell - 0.5, py + cell);
+          }
+          ctx.stroke();
+        }
+      }
     }
 
     const accentLine = theme === 'light' ? 'rgba(217,84,30,0.95)' : 'rgba(255,138,76,0.95)';
@@ -526,7 +640,21 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
         drawCellRect(hover.x, hover.y, cursorLine);
       }
     }
-  }, [hover, shapePreview, size, originX, originY, cell, tool, brushSize, flags, doc.width, doc.height, theme]);
+  }, [
+    hover,
+    shapePreview,
+    size,
+    originX,
+    originY,
+    cell,
+    tool,
+    brushSize,
+    flags,
+    doc.width,
+    doc.height,
+    theme,
+    shapeFill,
+  ]);
 
   // ===== 交互 =====
   const startPaint = (x: number, y: number, shift: boolean) => {
@@ -635,7 +763,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
       const rect = canvasRef.current!.getBoundingClientRect();
       const midX = (a.x + b.x) / 2 - rect.left;
       const midY = (a.y + b.y) / 2 - rect.top;
-      const next = Math.max(2, Math.min(48, pinch.zoom * (dist / pinch.dist)));
+      const next = Math.max(CELL_MIN, Math.min(CELL_MAX, pinch.zoom * (dist / pinch.dist)));
       const boardW = doc.width * next;
       const boardH = doc.height * next;
       setZoom(next);
@@ -710,7 +838,7 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
       const my = clientY - rect.top;
       const boardX = (mx - originX) / cell;
       const boardY = (my - originY) / cell;
-      const next = Math.max(2, Math.min(48, cell * factor));
+      const next = Math.max(CELL_MIN, Math.min(CELL_MAX, cell * factor));
       if (next === cell) return;
       manualZoomRef.current = true;
       setZoom(next);
@@ -751,7 +879,9 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     const dx = e.shiftKey ? -(e.deltaY || e.deltaX) : -e.deltaX;
     const dy = e.shiftKey ? 0 : -e.deltaY;
     if (!dx && !dy) return;
-    setPan({ x: pan.x + dx, y: pan.y + dy });
+    // 用 panBy 而不是 setPan({...pan})：后者读的是上一次渲染的闭包值，
+    // 滚轮/触控板一秒能来几十个事件，连续累加就会丢步，看起来像在抖。
+    panBy(dx, dy);
   };
   // React 的 onWheel 是 passive 的，里面 preventDefault 会被浏览器警告并忽略，
   // 所以自己挂一个 { passive: false } 的原生监听，才能阻止页面跟着滚动。
@@ -810,8 +940,8 @@ export default function CanvasStage({ doc, theme = 'dark' }: Props) {
     else if (cx > size.w - margin) dx = size.w - margin - cx;
     if (cy < margin) dy = margin - cy;
     else if (cy > size.h - margin) dy = size.h - margin - cy;
-    if (dx || dy) setPan({ x: pan.x + dx, y: pan.y + dy });
-  }, [cursorTick, hover, originX, originY, cell, size.w, size.h, pan.x, pan.y, setPan]);
+    if (dx || dy) panBy(dx, dy);
+  }, [cursorTick, hover, originX, originY, cell, size.w, size.h, panBy]);
 
   const cursor =
     tool === 'pan' || spaceDown

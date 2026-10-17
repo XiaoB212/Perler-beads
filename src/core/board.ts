@@ -48,6 +48,16 @@ export const PEGBOARD_PRESETS: { value: number; label: string; note?: string }[]
 /** 单块板的边长上限（格）：再大就没有实物对应了 */
 export const PEGBOARD_MAX = 256;
 
+/**
+ * 单格像素（zoom）的上下限，全局唯一定义。
+ * 上限从 48/64 提到 220：分板聚焦要把「一块 4×4 的小板」铺满视口，
+ * 60px 一格根本填不满，用户会抱怨「不会自动扩大至全屏铺满这个区域」。
+ * store 的 setZoom 和 CanvasStage 的所有缩放路径必须共用这两个常量，
+ * 否则会出现「聚焦放大到 189，落库却被夹回 64」这种画面直接空白的 bug。
+ */
+export const ZOOM_MIN = 2;
+export const ZOOM_MAX = 220;
+
 /** 新建图纸的默认边长：正方形，一块 64×64 板正好铺满 */
 export const DEFAULT_CANVAS_SIZE = 64;
 
