@@ -134,6 +134,14 @@
   overflow-y: auto;
   padding-right: 2px;
 }
+/* 移动端抽屉本身已经在滚动，里面再套一层滚动会很难滑 */
+@media (max-width: 760px) {
+  .swatch-grid.lib {
+    max-height: none;
+    overflow: visible;
+    padding-right: 0;
+  }
+}
 
 .current-color {
   display: flex;
