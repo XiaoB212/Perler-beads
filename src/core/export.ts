@@ -4,6 +4,7 @@ import { readableTextColor } from './color';
 import { rleDecode, rleDecodeU8, rleEncode } from './rle';
 import { downloadBlob, downloadText, safeFileName } from './util';
 import { getDefaultPrice } from './cost';
+import { PEGBOARD_PRESETS } from './board';
 
 export interface RenderOptions {
   cellSize: number;
@@ -99,17 +100,15 @@ function watermarkHeight(scale = 1) {
   return 24 * scale;
 }
 
-/** 市面常见拼豆板尺寸（5mm 豆） */
-export const BOARD_PRESETS: { value: number; label: string }[] = [
-  { value: 0, label: '不分板' },
-  { value: 10, label: '10 × 10' },
-  { value: 14, label: '14 × 14 小板' },
-  { value: 15, label: '15 × 15' },
-  { value: 20, label: '20 × 20' },
-  { value: 28, label: '28 × 28' },
-  { value: 29, label: '29 × 29 大板' },
-  { value: 48, label: '48 × 48' },
-];
+/**
+ * 市面常见拼豆板尺寸（5mm 豆）。
+ * 直接复用 board.ts 的 PEGBOARD_PRESETS，避免「导出面板列 8 档、设置里列 12 档」
+ * 这种同一个概念两套数据源的老毛病。
+ */
+export const BOARD_PRESETS: { value: number; label: string }[] = PEGBOARD_PRESETS.map((p) => ({
+  value: p.value,
+  label: p.note ? `${p.label} ${p.note}` : p.label,
+}));
 
 /** 分板后的坐标偏移（单位：格） */
 function boardOffsets(count: number, boardSize: number, gap: number) {
@@ -1571,15 +1570,16 @@ function pdfBoardPages(pdf: jsPDF, doc: PatternDoc, opts: PdfOptions, pw: number
         y1,
       });
 
-      // 板框固定按整块板画，残缺处留白，方便对位
-      pdf.setDrawColor(217, 84, 30);
-      pdf.setLineWidth(0.5);
+      // 板框固定按整块板画，残缺处留白，方便对位。
+      // 用中性灰而不是橙色：一板一页要打印出来照着拼，橙色框会抢豆子颜色的注意力。
+      pdf.setDrawColor(96, 100, 112);
+      pdf.setLineWidth(0.4);
       pdf.rect(gridX, gridY, bs * cell, bs * cell, 'S');
 
       // 拼装对位标记：板边缘中点的小三角
       const edgeW = bs * cell;
       const edgeH = bs * cell;
-      pdf.setFillColor(217, 84, 30);
+      pdf.setFillColor(140, 144, 156);
       const tri = Math.min(3, cell * 0.5);
       const midX = gridX + edgeW / 2;
       const midY = gridY + edgeH / 2;

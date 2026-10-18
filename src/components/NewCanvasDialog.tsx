@@ -8,7 +8,10 @@ import {
   CANVAS_SOFT_CELLS,
   DEFAULT_CANVAS_SIZE,
   DEFAULT_PEGBOARD,
+  PEGBOARD_MAX,
+  PEGBOARD_PRESETS,
   clampCanvasPair,
+  clampPegboard,
 } from '../core/board';
 import { IconClose, IconPlus } from './Icons';
 
@@ -16,14 +19,16 @@ interface Props {
   onClose: () => void;
 }
 
-/** 常用尺寸都按「常见方形板」的整数倍给，方便直接开拼；也能自己填任意值 */
-const SIZES = [
-  { w: 29, h: 29, label: '29 × 29', sub: '单块大板' },
-  { w: 48, h: 48, label: '48 × 48', sub: '单块加大板' },
-  { w: 64, h: 64, label: '64 × 64', sub: '默认' },
-  { w: 87, h: 87, label: '87 × 87', sub: '3×3 板' },
-  { w: 116, h: 116, label: '116 × 116', sub: '4×4 板' },
-  { w: 232, h: 232, label: '232 × 232', sub: '8×8 板' },
+const BOARD_SIZES = PEGBOARD_PRESETS.filter((p) => p.value > 0);
+
+/** 常用板数搭配：画布尺寸 = 单板格数 × 板数，和导入、导出用的是同一套分板口径 */
+const BOARD_COUNTS = [
+  { cols: 1, rows: 1, label: '1 × 1 块' },
+  { cols: 2, rows: 2, label: '2 × 2 块' },
+  { cols: 3, rows: 3, label: '3 × 3 块' },
+  { cols: 4, rows: 4, label: '4 × 4 块' },
+  { cols: 6, rows: 6, label: '6 × 6 块' },
+  { cols: 8, rows: 8, label: '8 × 8 块' },
 ];
 
 
@@ -36,6 +41,17 @@ export default function NewCanvasDialog({ onClose }: Props) {
   const [square, setSquare] = useState(true);
   const [paletteKey, setPaletteKey] = useState<string>(DEFAULT_PALETTE_KEY);
   const [name, setName] = useState('');
+  // 单块拼豆板的格数：先定板，再定用几块板，尺寸就是这两个数的乘积
+  const [boardSize, setBoardSize] = useState(DEFAULT_PEGBOARD);
+  const [boardText, setBoardText] = useState(String(DEFAULT_PEGBOARD));
+
+  const commitBoard = (raw: string) => {
+    setBoardText(raw);
+    if (raw.trim() === '') return;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return;
+    setBoardSize(clampPegboard(n) || DEFAULT_PEGBOARD);
+  };
 
   const toNum = (t: string) => {
     const n = Number(t.trim());
@@ -50,14 +66,22 @@ export default function NewCanvasDialog({ onClose }: Props) {
   const tooBig = cw * ch > CANVAS_SOFT_CELLS;
   const clamped = cw !== wNum || ch !== hNum;
 
+  /** 按「几块板 × 单板格数」定尺寸：这就是导入和导出用的同一套分板口径 */
+  const useBoardCount = (cols: number, rows: number) => {
+    setWText(String(clampCanvasPair(boardSize * cols, boardSize * rows).w));
+    setHText(String(clampCanvasPair(boardSize * cols, boardSize * rows).h));
+  };
+
   const boards = useMemo(
-    () => Math.ceil(cw / DEFAULT_PEGBOARD) * Math.ceil(ch / DEFAULT_PEGBOARD),
-    [cw, ch],
+    () => Math.ceil(cw / boardSize) * Math.ceil(ch / boardSize),
+    [cw, ch, boardSize],
   );
+  const boardCols = Math.ceil(cw / boardSize);
+  const boardRows = Math.ceil(ch / boardSize);
 
   const create = () => {
     if (dirty && !confirm('当前图纸尚未保存，新建会丢失未保存的内容。继续？')) return;
-    newDocument(cw, ch, paletteKey, name.trim() || '未命名图纸');
+    newDocument(cw, ch, paletteKey, name.trim() || '未命名图纸', boardSize);
     onClose();
   };
 
@@ -88,22 +112,57 @@ export default function NewCanvasDialog({ onClose }: Props) {
           </div>
 
           <div className="field" style={{ marginBottom: 14 }}>
-            <label>常用尺寸</label>
-            <div className="preset-grid">
-              {SIZES.map((s) => (
+            <label>单块拼豆板格数</label>
+            <div className="slider-row">
+              <input
+                className="input"
+                type="number"
+                min={2}
+                max={PEGBOARD_MAX}
+                style={{ width: 84 }}
+                value={boardText}
+                onChange={(e) => commitBoard(e.target.value)}
+                onBlur={() => setBoardText(String(boardSize))}
+                title={`实体板一行的格数，常用 29 / 48 / 64，最大 ${PEGBOARD_MAX}`}
+              />
+              <span className="val">× {boardSize} 格 / 块</span>
+            </div>
+            <div className="seg-wrap" style={{ marginTop: 8 }}>
+              {BOARD_SIZES.map((b) => (
                 <button
-                  key={s.w}
-                  className={'preset-btn' + (cw === s.w && ch === s.h ? ' active' : '')}
+                  key={b.value}
+                  className={'seg' + (boardSize === b.value ? ' on' : '')}
                   onClick={() => {
-                    setWText(String(s.w));
-                    setHText(String(s.h));
+                    setBoardSize(b.value);
+                    setBoardText(String(b.value));
                   }}
+                  title={b.note}
                 >
-                  <b>{s.label}</b>
-                  <span>{s.sub}</span>
+                  {b.value}
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="field" style={{ marginBottom: 14 }}>
+            <label>用几块板</label>
+            <div className="preset-grid">
+              {BOARD_COUNTS.map((p) => (
+                <button
+                  key={p.label}
+                  className={'preset-btn' + (boardCols === p.cols && boardRows === p.rows ? ' active' : '')}
+                  onClick={() => useBoardCount(p.cols, p.rows)}
+                >
+                  <b>{p.label}</b>
+                  <span>
+                    {boardSize * p.cols} × {boardSize * p.rows}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <span className="hint">
+              点一个就按当前单板格数算好画布；也可以直接在下面填任意宽高。
+            </span>
           </div>
 
           <div className="form-grid" style={{ marginBottom: 10 }}>
@@ -155,7 +214,7 @@ export default function NewCanvasDialog({ onClose }: Props) {
               ))}
             </select>
             <span className="hint">
-              共 {cw * ch} 格 · {boards} 块 {DEFAULT_PEGBOARD}×{DEFAULT_PEGBOARD} 拼豆板 · 色卡数据来自
+              共 {cw * ch} 格 · {boardCols} × {boardRows} = {boards} 块 {boardSize}×{boardSize} 拼豆板 · 色卡数据来自
               pindou-color-data
             </span>
             {clamped && (

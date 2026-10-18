@@ -36,6 +36,7 @@ export default function ProgressPanel() {
   const setSoloColor = useEditor((s) => s.setSoloColor);
   const markColorPlaced = useEditor((s) => s.markColorPlaced);
   const notify = useEditor((s) => s.notify);
+  const zoomToCell = useEditor((s) => s.zoomToCell);
   const [autoNext, setAutoNext] = useState(true);
   const [shareMsg, setShareMsg] = useState('');
 
@@ -85,10 +86,9 @@ export default function ProgressPanel() {
 
   const share = async () => {
     const res = await buildShareUrl(doc);
-    const saved = res.saved && res.saved > 0 ? `（压缩后短了 ${res.saved} 个字符）` : '';
     const hint = res.tooLong
-      ? `链接有点长（${res.length} 字符），有些聊天工具可能会截断，可以改用导出的 PNG / PDF 分享`
-      : `进度链接已复制${saved}，发给别人就能看到你拼到哪儿了`;
+      ? `这张图太大，链接 ${res.length} 字符，微信/Discord 之类多半会截断。建议改用导出的 PNG / PDF 分享，或者只分享小图。`
+      : `进度链接已复制（${res.length} 字符）${res.saved && res.saved > 0 ? `，比不压缩短 ${res.saved} 字符` : ''}，发给别人就能看到你拼到哪儿了`;
     const done = () => {
       setShareMsg(hint);
       notify(res.tooLong ? '进度链接已复制（偏长）' : '进度链接已复制', res.tooLong ? 'warn' : 'ok');
@@ -111,14 +111,43 @@ export default function ProgressPanel() {
       </div>
 
       <div className="row-toggle" onClick={() => setFlag('progressCheck', !flags.progressCheck)}>
-        <span>对色拼装（点错打叉）</span>
+        <span>对色拼装（对色判对错）</span>
         <span className={'switch' + (flags.progressCheck ? ' on' : '')} />
       </div>
       <p className="hint" style={{ marginTop: 6 }}>
         {flags.progressCheck
-          ? '先选你现在手上在拼的色号，点对了打勾、点错了打叉，同色格子会高亮出来。'
+          ? '先选你现在手上在拼的色号，点对了打勾、点错了标出来，同色格子会高亮出来。'
           : '关着的时候就是随手点一下打勾，不挑色号。'}
       </p>
+
+      {flags.progressCheck && (
+        <div className="field" style={{ marginTop: 4 }}>
+          <label>拼错怎么标</label>
+          <div className="seg-wrap">
+            <button
+              className={flags.wrongStyle === 'ring' ? 'active' : ''}
+              onClick={() => setFlag('wrongStyle', 'ring')}
+              title="格子外围描一道红边，豆子颜色还看得见"
+            >
+              描边
+            </button>
+            <button
+              className={flags.wrongStyle === 'cross' ? 'active' : ''}
+              onClick={() => setFlag('wrongStyle', 'cross')}
+              title="盖一个大红叉，最显眼但会遮住颜色"
+            >
+              打叉
+            </button>
+            <button
+              className={flags.wrongStyle === 'none' ? 'active' : ''}
+              onClick={() => setFlag('wrongStyle', 'none')}
+              title="画布上不画，只在面板里统计"
+            >
+              不标
+            </button>
+          </div>
+        </div>
+      )}
 
       {flags.progressCheck && (
         <>
@@ -132,13 +161,31 @@ export default function ProgressPanel() {
                 <span>/ {overall.total} 颗</span>
               </div>
               <div className="progress-acc">
-                对 {rightCount} · 叉 {wrongCount}
+                对 {rightCount} · 错 {wrongCount}
                 {accuracy !== null && <em>准确率 {accuracy}%</em>}
+                {wrongMarks.size > 0 && flags.wrongStyle === 'none' && (
+                  <em className="wrong-hint">画布上没标，{wrongMarks.size} 处还没改</em>
+                )}
               </div>
               {wrongMarks.size > 0 && (
-                <button className="btn tiny" onClick={clearWrong}>
-                  清掉 {wrongMarks.size} 个叉号
-                </button>
+                <div className="wrong-actions">
+                  <button
+                    className="btn tiny"
+                    onClick={() => {
+                      // 按行列顺序找第一个还没拼错修正的格子，跳过去让人补
+                      const first = Array.from(wrongMarks).sort((a, b) => a - b)[0];
+                      const w = doc.width;
+                      zoomToCell(first % w, Math.floor(first / w));
+                      notify(`带你去第 ${Math.floor(first / w) + 1} 行第 ${(first % w) + 1} 列看看`);
+                    }}
+                    title="把视口移到第一处拼错的格子"
+                  >
+                    带我去看第一处
+                  </button>
+                  <button className="btn tiny" onClick={clearWrong}>
+                    清掉 {wrongMarks.size} 处
+                  </button>
+                </div>
               )}
             </div>
           </div>
@@ -165,9 +212,11 @@ export default function ProgressPanel() {
                     }}
                   >
                     <span className="check-color-dot" style={{ background: r.hex }} />
-                    <span className="check-color-code">{r.code}</span>
-                    <span className="check-color-num">
-                      {r.placed}/{r.total}
+                    <span className="check-color-body">
+                      <span className="check-color-code">{r.code}</span>
+                      <span className="check-color-num">
+                        {r.placed} <i>/</i> {r.total}
+                      </span>
                     </span>
                   </button>
                 );
@@ -178,8 +227,10 @@ export default function ProgressPanel() {
                 onClick={() => setCheckColor(-1)}
               >
                 <span className="check-color-dot any" />
-                <span className="check-color-code">任意</span>
-                <span className="check-color-num">不判定</span>
+                <span className="check-color-body">
+                  <span className="check-color-code">任意</span>
+                  <span className="check-color-num">不判定</span>
+                </span>
               </button>
             </div>
           </div>

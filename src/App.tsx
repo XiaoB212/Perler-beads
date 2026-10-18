@@ -34,6 +34,7 @@ import {
   IconRect,
   IconRedo,
   IconSettings,
+  IconSparkle,
   IconSun,
   IconMoon,
   IconUndo,
@@ -106,6 +107,7 @@ export default function App() {
   const renameDoc = useEditor((s) => s.renameDoc);
   const flags = useEditor((s) => s.flags);
   const toggleFlag = useEditor((s) => s.toggleFlag);
+const setOnlineMode = useEditor((s) => s.setOnlineMode);
   const loadDocument = useEditor((s) => s.loadDocument);
   const notify = useEditor((s) => s.notify);
   const brushSize = useEditor((s) => s.brushSize);
@@ -217,7 +219,7 @@ export default function App() {
     }
   }, []);
 
-  // 分享链接（#progress=… 或老版 #p=…）：打开就能看到对方拼到哪儿了
+  // 分享链接（#p=…）：打开就能看到对方拼到哪儿了
   useEffect(() => {
     const hash = window.location.hash;
     let cancelled = false;
@@ -248,7 +250,7 @@ export default function App() {
       // 读完就把 hash 清掉，之后的编辑与自动保存才不会被链接反复覆盖
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     };
-    if (hash.startsWith('#progress=') || hash.startsWith('#p=')) void open();
+    if (hash.startsWith('#p=')) void open();
     return () => {
       cancelled = true;
     };
@@ -460,6 +462,9 @@ export default function App() {
         case 'view.progress':
           toggleFlag('progressMode');
           return;
+        case 'view.online':
+          setOnlineMode(!useEditor.getState().flags.onlineMode);
+          return;
         case 'view.grid':
           toggleFlag('grid');
           return;
@@ -642,6 +647,14 @@ export default function App() {
               <span className="rail-label">进度</span>
             </button>
             <button
+              className={'rail-btn' + (flags.onlineMode ? ' active' : '')}
+              onClick={() => setOnlineMode(!flags.onlineMode)}
+              title="线上拼豆模式：对色判对错 + 单色高亮 + 进度环 + 分享链接"
+            >
+              <IconSparkle width={17} height={17} />
+              <span className="rail-label">线上</span>
+            </button>
+            <button
               className={'rail-btn' + (flags.grid ? ' active' : '')}
               onClick={() => toggleFlag('grid')}
               title="网格线"
@@ -728,8 +741,16 @@ export default function App() {
               <button
                 className={'tbar-chip' + (flags.progressMode ? ' on' : '')}
                 onClick={() => toggleFlag('progressMode')}
+                title="进度模式：点格子打个勾，只记「拼了没」"
               >
                 <IconCheck width={12} height={12} /> 进度
+              </button>
+              <button
+                className={'tbar-chip' + (flags.onlineMode ? ' on' : '')}
+                onClick={() => setOnlineMode(!flags.onlineMode)}
+                title="线上拼豆模式：照着图纸一颗颗拼，带对色判对错、单色高亮、进度环和分享链接"
+              >
+                <IconSparkle width={12} height={12} /> 线上
               </button>
               <button className={'tbar-chip' + (flags.grid ? ' on' : '')} onClick={() => toggleFlag('grid')}>
                 <IconGrid width={12} height={12} /> 网格
@@ -858,6 +879,13 @@ export default function App() {
             >
               <IconCheck width={19} height={19} />
               进度
+            </button>
+            <button
+              className={'mtool' + (flags.onlineMode ? ' active' : '')}
+              onClick={() => setOnlineMode(!flags.onlineMode)}
+            >
+              <IconSparkle width={19} height={19} />
+              线上
             </button>
             <button
               className={'mtool' + (sheet === 'colors' ? ' active' : '')}

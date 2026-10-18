@@ -428,6 +428,9 @@ export default function ExportDialog({ onClose }: Props) {
                       {boardSize > 0
                         ? `${doc.width} × ${doc.height} 需要 ${boardCols} × ${boardRows} = ${boardTotal} 块板，导出图上会标出板框与板号`
                         : '选一个板尺寸，导出图会按实体板切分并标出板号；填 0 表示不画分板'}
+                      {doc.pegboard > 0
+                        ? `。默认跟新建图纸时设的 ${doc.pegboard}×${doc.pegboard} 一致，这里改只影响本次导出。`
+                        : '。想按实体板切分，可以直接在上面填任意格数。'}
                     </span>
                   </div>
                   <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '0 10px' }}>

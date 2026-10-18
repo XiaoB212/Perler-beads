@@ -7,7 +7,9 @@
   align-items: center;
   justify-content: center;
   padding: 20px;
-  background: color-mix(in srgb, var(--bg) 62%, transparent);
+  /* 遮罩要压得住背后的画布：太淡会让对话框看着像半透明，脏 */
+  background: color-mix(in srgb, var(--bg) 78%, transparent);
+  backdrop-filter: blur(2px);
   animation: fade-in 0.16s ease;
 }
 

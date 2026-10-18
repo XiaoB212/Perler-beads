@@ -33,6 +33,7 @@ export type ActionId =
   | 'view.zoomOut'
   | 'view.fit'
   | 'view.progress'
+  | 'view.online'
   | 'view.grid'
   | 'view.pegboard'
   | 'view.boardIds'
@@ -88,6 +89,7 @@ export const ACTIONS: ActionDef[] = [
   { id: 'view.zoomOut', group: '视图', label: '缩小', def: '-' },
   { id: 'view.fit', group: '视图', label: '适应窗口', def: '0' },
   { id: 'view.progress', group: '视图', label: '进度模式', def: 'p' },
+  { id: 'view.online', group: '视图', label: '线上拼豆模式', def: 'shift+o' },
   { id: 'view.grid', group: '视图', label: '网格线', def: ';' },
   { id: 'view.pegboard', group: '视图', label: '拼豆板分界', def: '' },
   { id: 'view.boardIds', group: '视图', label: '板号标签', def: '' },

@@ -203,11 +203,15 @@ export default function SettingsPanel({
         ))}
       </div>
 
-      {flags.progressMode && (
+      {flags.onlineMode ? (
         <div className="hint-box" style={{ marginTop: 10 }}>
-          进度模式已开：对色拼装、单色模式、整色完成和进度链接都在右侧「用量」页里，拼的时候不用来回切面板。
+          线上拼豆模式已开：对色判对错、单色高亮、整色完成、进度环和进度链接都在右侧「用量」页里，拼的时候不用来回切面板。
         </div>
-      )}
+      ) : flags.progressMode ? (
+        <div className="hint-box" style={{ marginTop: 10 }}>
+          进度模式只是「点格子打个勾」。想照着图纸一颗颗对色拼，去右侧「用量」页打开「线上拼豆模式」。
+        </div>
+      ) : null}
 
       <div className="divider" />
       <div className="panel-head">

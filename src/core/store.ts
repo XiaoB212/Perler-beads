@@ -33,6 +33,8 @@ export interface DocMeta {
 }
 
 const HISTORY_LIMIT = 60;
+/** 连续点错时别一直弹提示，节流一下 */
+let lastWrongNotice = 0;
 
 /**
  * 撤销快照会整份拷贝 cells（Uint16）+ progress（Uint8），约 3 字节/格。
@@ -70,6 +72,7 @@ export function createDoc(
   height: number,
   paletteKey = DEFAULT_PALETTE_KEY,
   name = '未命名图纸',
+  pegboard = DEFAULT_PEGBOARD,
 ): PatternDoc {
   const { w, h } = clampCanvasPair(width, height);
   const palette = palettePreset(paletteKey);
@@ -81,7 +84,7 @@ export function createDoc(
     cells: new Uint16Array(w * h),
     progress: new Uint8Array(w * h),
     palette,
-    pegboard: DEFAULT_PEGBOARD,
+    pegboard: clampPegboard(pegboard),
     createdAt: Date.now(),
     updatedAt: Date.now(),
     notes: '',
@@ -182,6 +185,8 @@ interface EditorState {
   setBrushSize: (n: number) => void;
   setShapeFill: (v: boolean) => void;
   toggleFlag: (k: keyof ViewFlags) => void;
+  /** 线上拼豆模式总开关：打开时自动带起进度模式与对色拼装，关掉时一起收回去 */
+  setOnlineMode: (on: boolean) => void;
   setFlag: <K extends keyof ViewFlags>(k: K, v: ViewFlags[K]) => void;
   setZoom: (z: number) => void;
   setPan: (p: { x: number; y: number }) => void;
@@ -215,13 +220,15 @@ interface EditorState {
    * 关掉时就是简单取反。
    */
   clickProgress: (x: number, y: number) => void;
-  /** 清空所有打叉标记（保留累计次数） */
+  /** 清空所有拼错标记（保留累计次数） */
   clearWrong: () => void;
+  /** 把视口挪到某一格并放大，用来「带我去看第一处拼错」 */
+  zoomToCell: (x: number, y: number) => void;
   floodFill: (x: number, y: number) => void;
   drawLine: (x0: number, y0: number, x1: number, y1: number) => void;
   drawShape: (kind: 'rect' | 'ellipse', x0: number, y0: number, x1: number, y1: number) => void;
 
-  newDocument: (w: number, h: number, paletteKey: string, name?: string) => void;
+  newDocument: (w: number, h: number, paletteKey: string, name?: string, pegboard?: number) => void;
   loadDocument: (doc: PatternDoc) => void;
   renameDoc: (name: string) => void;
   resizeDoc: (w: number, h: number) => void;
@@ -282,10 +289,38 @@ export const useEditor = create<EditorState>((set, get) => ({
   cursorTick: 0,
 
   setTool: (t) => set({ tool: t }),
-  setColorIndex: (i) => set({ colorIndex: i, tool: get().tool === 'picker' ? 'pencil' : get().tool }),
+  setColorIndex: (i) =>
+    set((s) => ({
+      colorIndex: i,
+      tool: s.tool === 'picker' ? 'pencil' : s.tool,
+      // 对色拼装时画笔就是判定的依据，换色号时面板上「正在拼的」也要跟着换，
+      // 不然面板写着 A02、手里拿的是 J04，点哪都被判成错。
+      checkColor: s.flags.progressCheck && s.checkColor >= 0 ? i : s.checkColor,
+    })),
   setBrushSize: (n) => set({ brushSize: Math.max(1, Math.min(16, n)) }),
   setShapeFill: (v) => set({ shapeFill: v }),
-  toggleFlag: (k) => set({ flags: { ...get().flags, [k]: !get().flags[k] } }),
+  toggleFlag: (k) => {
+    const cur = get().flags;
+    if (k === 'onlineMode') {
+      get().setOnlineMode(!cur.onlineMode);
+      return;
+    }
+    const next = !cur[k];
+    // 线上拼豆模式自带进度模式：进度模式一关，线上模式也就没意义了
+    if (k === 'progressMode' && !next) {
+      set({ flags: { ...cur, progressMode: false, onlineMode: false } });
+      return;
+    }
+    set({ flags: { ...cur, [k]: next } });
+  },
+  setOnlineMode: (on) => {
+    const cur = get().flags;
+    set({
+      flags: on
+        ? { ...cur, onlineMode: true, progressMode: true, progressCheck: true }
+        : { ...cur, onlineMode: false, progressMode: false, progressCheck: false },
+    });
+  },
   setFlag: (k, v) => set({ flags: { ...get().flags, [k]: v } }),
   setZoom: (z) => set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)) }),
   setPan: (p) => set({ pan: p }),
@@ -427,16 +462,17 @@ export const useEditor = create<EditorState>((set, get) => ({
   },
 
   clickProgress: (x, y) => {
-    const { doc, brushSize, focus, flags, checkColor, soloColor } = get();
+    const { doc, brushSize, focus, flags, colorIndex, checkColor, soloColor } = get();
     if (!allows(focus, doc.width, doc.height, x, y)) return;
     const i = y * doc.width + x;
     if (doc.cells[i] === 0) return;
     // 单色模式：点到别的颜色直接不理，避免手滑把别的色号也勾上
     if (soloColor !== null && doc.cells[i] - 1 !== soloColor) return;
 
-    // 只有「对色拼装」才做色号判定；否则保持原来的随手打勾
+    // 对色拼装：判定用的是「手上的画笔颜色」——这才是用户手里真正拿的那颗豆。
+    // 只有选「任意」时才退回成随手打勾。
     if (flags.progressCheck && checkColor >= 0) {
-      const want = checkColor + 1;
+      const want = colorIndex + 1;
       const hit = doc.cells[i] === want;
       const progress = new Uint8Array(doc.progress);
       const wrong = new Set(get().wrongMarks);
@@ -447,10 +483,20 @@ export const useEditor = create<EditorState>((set, get) => ({
         const already = progress[i] === 1;
         progress[i] = already ? 0 : 1;
         if (!already) rightCount += 1;
-        wrong.delete(i);
-      } else {
+        // 把这一格的错号清掉时，错数也要跟着减，否则准确率只会往下掉
+        if (wrong.delete(i)) wrongCount = Math.max(0, wrongCount - 1);
+      } else if (!wrong.has(i)) {
+        // 同一格反复点错只算一次，不然错数会虚高
         wrong.add(i);
         wrongCount += 1;
+        const need = doc.palette[doc.cells[i] - 1];
+        if (need && Date.now() - lastWrongNotice > 700) {
+          lastWrongNotice = Date.now();
+          get().notify(
+            `这里有错：第 ${y + 1} 行第 ${x + 1} 列该放 ${need.code}，不是你手上的这个色号`,
+            'warn',
+          );
+        }
       }
       void brushSize;
       set({
@@ -565,8 +611,8 @@ export const useEditor = create<EditorState>((set, get) => ({
     set({ doc: { ...doc, updatedAt: Date.now() }, dirty: true });
   },
 
-  newDocument: (w, h, paletteKey, name) => {
-    const doc = createDoc(w, h, paletteKey, name);
+  newDocument: (w, h, paletteKey, name, pegboard) => {
+    const doc = createDoc(w, h, paletteKey, name, pegboard);
     set({
       doc,
       past: [],
@@ -785,6 +831,19 @@ export const useEditor = create<EditorState>((set, get) => ({
   markClean: () => set({ dirty: false }),
   setDocMetaList: (l) => set({ docMetaList: l }),
   requestFit: () => set({ fitRequest: get().fitRequest + 1 }),
+
+  zoomToCell: (x, y) => {
+    const { doc } = get();
+    // 格子放到 14–28px 之间：太小看不清色号，太大又看不到上下文
+    const cell = Math.min(28, Math.max(14, get().zoom));
+    set({
+      zoom: cell,
+      pan: {
+        x: (doc.width / 2 - (x + 0.5)) * cell,
+        y: (doc.height / 2 - (y + 0.5)) * cell,
+      },
+    });
+  },
 
   moveCursor: (dx, dy, step = 1) => {
     const { doc, hover } = get();

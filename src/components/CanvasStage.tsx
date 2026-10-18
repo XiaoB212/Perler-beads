@@ -235,8 +235,10 @@ const checkColor = useEditor((s) => s.checkColor);
     const byColorDim = new Map<string, Path2D>();
     const holes = new Path2D();
     const checks = new Path2D();
-    // 对色拼装：点错的格子上盖一个红叉
+    // 对色拼装：点错的格子按用户选的提醒方式标记
     const wrongs = new Path2D();
+    const wrongRings = new Path2D();
+    const wrongStyle = flags.progressMode ? flags.wrongStyle : 'none';
     const checkActive = flags.progressMode && flags.progressCheck && checkColor >= 0;
     // 当前正在拼的色号，用它给同色格子加一圈提示，线上照着拼时一眼看清该放哪
     const targetV = checkActive ? checkColor + 1 : solo !== null ? solo + 1 : 0;
@@ -296,10 +298,31 @@ const checkColor = useEditor((s) => s.checkColor);
           checks.lineTo(px + cell * 0.8, py + cell * 0.26);
         }
         if (flags.progressMode && wrongMarks.has(y * doc.width + x)) {
-          wrongs.moveTo(px + cell * 0.24, py + cell * 0.24);
-          wrongs.lineTo(px + cell * 0.76, py + cell * 0.76);
-          wrongs.moveTo(px + cell * 0.76, py + cell * 0.24);
-          wrongs.lineTo(px + cell * 0.24, py + cell * 0.76);
+          if (wrongStyle === 'cross') {
+            wrongs.moveTo(px + cell * 0.24, py + cell * 0.24);
+            wrongs.lineTo(px + cell * 0.76, py + cell * 0.76);
+            wrongs.moveTo(px + cell * 0.76, py + cell * 0.24);
+            wrongs.lineTo(px + cell * 0.24, py + cell * 0.76);
+          } else if (wrongStyle === 'ring') {
+            // 描一圈边而不是盖叉：豆子颜色还看得见，才知道自己其实拿的是哪颗
+            const m = Math.max(1, cell * 0.09);
+            if (roundCell) {
+              const cx = px + cell / 2;
+              const cy = py + cell / 2;
+              wrongRings.moveTo(cx + beadR - m, cy);
+              wrongRings.arc(cx, cy, Math.max(1, beadR - m), 0, Math.PI * 2);
+              wrongRings.moveTo(cx + beadR - 2.6 * m, cy);
+              wrongRings.arc(cx, cy, Math.max(0.5, beadR - 2.6 * m), 0, Math.PI * 2);
+            } else {
+              wrongRings.rect(px + m, py + m, cell - 2 * m, cell - 2 * m);
+              wrongRings.rect(
+                px + 2.6 * m,
+                py + 2.6 * m,
+                Math.max(1, cell - 5.2 * m),
+                Math.max(1, cell - 5.2 * m),
+              );
+            }
+          }
         }
         if (targetV && v === targetV && !placed) {
           // 双层路径 + evenodd 填充 = 一圈描边环，不遮住豆子本身的颜色
@@ -371,11 +394,16 @@ const checkColor = useEditor((s) => s.checkColor);
       ctx.lineWidth = Math.max(1.2, cell * 0.09);
       ctx.stroke(checks);
       if (wrongMarks.size && cell >= 6) {
-        ctx.strokeStyle = C.wrong;
-        ctx.lineWidth = Math.max(1.6, cell * 0.11);
-        ctx.lineCap = 'round';
-        ctx.stroke(wrongs);
-        ctx.lineCap = 'butt';
+        if (wrongStyle === 'cross') {
+          ctx.strokeStyle = C.wrong;
+          ctx.lineWidth = Math.max(1.6, cell * 0.11);
+          ctx.lineCap = 'round';
+          ctx.stroke(wrongs);
+          ctx.lineCap = 'butt';
+        } else if (wrongStyle === 'ring') {
+          ctx.fillStyle = C.wrong;
+          ctx.fill(wrongRings, 'evenodd');
+        }
       }
     }
     ctx.restore();
@@ -714,6 +742,12 @@ const checkColor = useEditor((s) => s.checkColor);
   const startPaint = (x: number, y: number, shift: boolean) => {
     const s = useEditor.getState();
     if (s.flags.progressMode) {
+      // 开了对色拼装就必须走 clickProgress 做色号判定，
+      // 否则直接 paintProgressCell 会把错的格子也老老实实打上勾。
+      if (s.flags.progressCheck && s.checkColor >= 0) {
+        s.clickProgress(x, y);
+        return;
+      }
       const i = y * doc.width + x;
       const target = doc.cells[i] && doc.progress[i] ? 0 : 1;
       s.progressTarget = target;
@@ -856,7 +890,9 @@ const checkColor = useEditor((s) => s.checkColor);
     if (!inBounds(x, y)) return;
     if (drag.mode === 'progress') {
       const s = useEditor.getState();
-      s.paintProgressCell(x, y, s.progressTarget);
+      // 对色拼装时拖着划过的格子也要按色号判定，不能一律打勾
+      if (s.flags.progressCheck && s.checkColor >= 0) s.clickProgress(x, y);
+      else s.paintProgressCell(x, y, s.progressTarget);
     } else if (drag.mode === 'erase') {
       const s = useEditor.getState();
       s.paintCell(x, y, { value: 0 });

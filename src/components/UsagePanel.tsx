@@ -10,7 +10,7 @@ export default function UsagePanel() {
   const colorIndex = useEditor((s) => s.colorIndex);
   const setColorIndex = useEditor((s) => s.setColorIndex);
   const markAllPlaced = useEditor((s) => s.markAllPlaced);
-  const toggleFlag = useEditor((s) => s.toggleFlag);
+  const setOnlineMode = useEditor((s) => s.setOnlineMode);
   const flags = useEditor((s) => s.flags);
   const updateColor = useEditor((s) => s.updateColor);
   const soloColor = useEditor((s) => s.soloColor);
@@ -106,13 +106,13 @@ export default function UsagePanel() {
 
       <div style={{ display: 'flex', gap: 6, marginBottom: 6 }}>
         <button
-          className={'btn sm ' + (flags.progressMode ? 'primary' : '')}
-          onClick={() => toggleFlag('progressMode')}
+          className={'btn sm ' + (flags.onlineMode ? 'primary' : '')}
+          onClick={() => setOnlineMode(!flags.onlineMode)}
           style={{ flex: 1 }}
-          title="开启后画笔用于勾选已拼好的豆子"
+          title="线上拼豆模式：照着图纸一颗颗拼，对色判对错、单色高亮、进度环和分享链接都在这一套里"
         >
           <IconCheck width={12} height={12} />
-          {flags.progressMode ? '进度模式 开' : '进度模式'}
+          {flags.onlineMode ? '线上拼豆模式 开' : '线上拼豆模式'}
         </button>
         <button
           className={'btn sm ' + (soloColor !== null ? 'primary' : '')}
@@ -194,14 +194,23 @@ export default function UsagePanel() {
         </>
       )}
 
-      {mode === 'usage' && flags.progressMode && (
+      {mode === 'usage' && flags.onlineMode && (
         <>
           <div className="online-banner">
             <b>线上拼豆模式</b>
-            <span>对色打勾 / 打叉，每格颜色进度都在下面这个面板里；单色模式可以只留一个色号。</span>
+            <span>
+              照着图纸一颗颗拼：对色判对错、单色高亮、每格颜色进度都在下面这个面板里，还能把进度做成链接发出去。
+            </span>
           </div>
           <ProgressPanel />
         </>
+      )}
+
+      {mode === 'usage' && !flags.onlineMode && (
+        <div className="hint-box" style={{ marginBottom: 12 }}>
+          上面那个「线上拼豆模式」是照着图纸拼的一整套：开起来才有对色判对错、单色高亮、进度环和进度链接。
+          只想要「点一下打个勾」，用左上角的「进度」按钮就够了。
+        </div>
       )}
 
       {mode === 'usage' && (
