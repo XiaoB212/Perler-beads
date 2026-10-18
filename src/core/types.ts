@@ -79,6 +79,11 @@ export interface ViewFlags {
   showCodes: boolean;
   /** 豆子形状：方格（默认）或圆格 */
   cellShape: CellShape;
+  /**
+   * 双击画布进入「只看这块板」。关掉之后双击没有任何效果，
+   * 板的位置只能在设置里点板号改 —— 涂色时不会莫名其妙跳进小分板。
+   */
+  dblClickFocus: boolean;
 }
 
 export type CellShape = 'square' | 'circle';
@@ -96,6 +101,7 @@ export const DEFAULT_FLAGS: ViewFlags = {
   progressCheck: false,
   showCodes: false,
   cellShape: 'square',
+  dblClickFocus: true,
 };
 
 /** 撤销快照 */

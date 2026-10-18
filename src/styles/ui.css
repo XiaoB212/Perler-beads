@@ -434,6 +434,26 @@ input[type='range']::-moz-range-thumb {
   color: var(--ink-2);
 }
 
+/* 线上拼豆模式的横幅：进度面板被移到「用量」页，这里给一句定位说明 */
+.online-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--ink-2);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.online-banner b {
+  font-size: 12px;
+  color: var(--ink);
+}
+
 /* 导出面板的「色号印得清吗」提前提示：看清是绿的，看不清是琥珀色并给一键改法 */
 .advice-box {
   display: flex;

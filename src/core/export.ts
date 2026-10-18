@@ -142,6 +142,55 @@ export function boardLabel(col: number, row: number) {
   return `${String.fromCharCode(65 + (row % 26))}${col + 1}`;
 }
 
+/**
+ * 网格线的位置（单位：格）。
+ *
+ * 这里必须和格子的坐标用同一套 lay.x / lay.y —— 之前网格线是按「均匀 1 格」画的，
+ * 而分板时格子之间还夹着 1.2 格的板缝，于是第 2 块板往后的线全都比格子偏一点，
+ * 用户看到的就是「方格偏差」「网格线偏了」。3×3 板时第 64 格那条线偏了 28.8px。
+ *
+ * 返回的每个值都是某条竖线的格坐标；板与板之间的缝隙里没有线（缝隙本身要留白）。
+ */
+export function gridLinePositions(count: number, boardSize: number, gap: number): number[] {
+  if (count <= 0) return [];
+  const { offsets } = boardOffsets(count, boardSize, gap);
+  const seen = new Set<number>();
+  const out: number[] = [];
+  const push = (v: number) => {
+    const k = Math.round(v * 1000) / 1000;
+    if (seen.has(k)) return;
+    seen.add(k);
+    out.push(k);
+  };
+  // 每格要画「左边界 + 右边界」两条线。只画左边界的话，每块板的最后一列/行
+  // 就没有收边线，看上去像少画了一块板（用户说的「导出缺 A1 板」就是这个）。
+  for (let i = 0; i < count; i++) {
+    push(offsets[i]);
+    push(offsets[i] + 1);
+  }
+  out.sort((a, b) => a - b);
+  return out;
+}
+
+/** 每 5 格加深的线（同样要跟着板缝走，否则又会错位） */
+export function gridStrongPositions(count: number, boardSize: number, gap: number, step = 5): number[] {
+  if (count <= 0 || step <= 0) return [];
+  const { offsets } = boardOffsets(count, boardSize, gap);
+  const out: number[] = [];
+  if (boardSize > 0) {
+    // 分板时：每块板从自己的起点数 5 / 10 / 15 …，板边界单独画，避免线穿板
+    for (let start = 0; start < count; start += boardSize) {
+      const end = Math.min(count, start + boardSize);
+      out.push(offsets[start]);
+      for (let o = step; o < end - start; o += step) out.push(offsets[start + o]);
+    }
+    out.push(offsets[count - 1] + 1);
+  } else {
+    for (let i = 0; i <= count; i += step) out.push(i);
+  }
+  return out;
+}
+
 function inkFor(hex: string): string {
   return readableTextColor(hex);
 }
@@ -264,13 +313,13 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     ctx.strokeStyle = 'rgba(0,0,0,0.16)';
     ctx.lineWidth = 0.5;
     ctx.beginPath();
-    for (let x = 0; x < spanW; x++) {
-      const px = padLeft + x * cs;
+    for (const gx of gridLinePositions(width, bs, gap)) {
+      const px = padLeft + gx * cs;
       ctx.moveTo(px, padTop);
       ctx.lineTo(px, padTop + gridH);
     }
-    for (let y = 0; y < spanH; y++) {
-      const py = padTop + y * cs;
+    for (const gy of gridLinePositions(height, bs, gap)) {
+      const py = padTop + gy * cs;
       ctx.moveTo(padLeft, py);
       ctx.lineTo(padLeft + gridW, py);
     }
@@ -319,19 +368,19 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
       }
     }
   } else if (opts.grid) {
-    // 每 5 格加深（不分板时才画，分板时由板框代替）
+    // 每 5 格加深（同样跟着 lay 走，分板时也能对齐）
     ctx.strokeStyle = 'rgba(0,0,0,0.42)';
     ctx.lineWidth = 0.9;
     ctx.beginPath();
-    for (let x = 0; x <= width; x += 5) {
-      const px = padLeft + x * cs;
+    for (const gx of gridStrongPositions(width, bs, gap)) {
+      const px = padLeft + gx * cs;
       ctx.moveTo(px, padTop);
-      ctx.lineTo(px, padTop + height * cs);
+      ctx.lineTo(px, padTop + gridH);
     }
-    for (let y = 0; y <= height; y += 5) {
-      const py = padTop + y * cs;
+    for (const gy of gridStrongPositions(height, bs, gap)) {
+      const py = padTop + gy * cs;
       ctx.moveTo(padLeft, py);
-      ctx.lineTo(padLeft + width * cs, py);
+      ctx.lineTo(padLeft + gridW, py);
     }
     ctx.stroke();
   }
@@ -562,13 +611,14 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
   }
   if (opts.grid) {
     out.push(`<g id="grid" stroke="rgba(0,0,0,0.18)" stroke-width="0.5">`);
-    for (let x = 0; x <= spanW; x++) {
-      const px = padLeft + x * cs;
-      out.push(`<line x1="${px}" y1="${padTop}" x2="${px}" y2="${padTop + spanH * cs}"/>`);
+    // 线坐标跟着 lay.x / lay.y 走，分板时才不会错位
+    for (const gx of gridLinePositions(width, bs, gap)) {
+      const px = padLeft + gx * cs;
+      out.push(`<line x1="${px.toFixed(2)}" y1="${padTop}" x2="${px.toFixed(2)}" y2="${(padTop + gridH).toFixed(2)}"/>`);
     }
-    for (let y = 0; y <= spanH; y++) {
-      const py = padTop + y * cs;
-      out.push(`<line x1="${padLeft}" y1="${py}" x2="${padLeft + spanW * cs}" y2="${py}"/>`);
+    for (const gy of gridLinePositions(height, bs, gap)) {
+      const py = padTop + gy * cs;
+      out.push(`<line x1="${padLeft}" y1="${py.toFixed(2)}" x2="${(padLeft + spanW * cs).toFixed(2)}" y2="${py.toFixed(2)}"/>`);
     }
     out.push(`</g>`);
   }
@@ -689,10 +739,8 @@ export interface PdfOptions extends RenderOptions {
   /**
    * single = 整张图纸缩放进一张纸（分板时画出板框与板号）
    * boards = 一块实体板一页，按板尺寸放大，可 1:1 打印
-   * tile   = 按每页格数分块
    */
-  layout: 'single' | 'boards' | 'tile';
-  maxCellsPerPage: number;
+  layout: 'single' | 'boards';
   withLegend: boolean;
   withHeader: boolean;
   /** 页脚打印 50mm 校准标尺，用来确认打印没有缩放 */
@@ -704,7 +752,6 @@ export const DEFAULT_PDF: Omit<PdfOptions, 'title'> = {
   pageSize: 'a4',
   orientation: 'auto',
   layout: 'single',
-  maxCellsPerPage: 32,
   withLegend: false,
   withHeader: true,
   calibration: true,
@@ -835,26 +882,34 @@ function pdfDrawPattern(
   if (opts.grid) {
     pdf.setDrawColor(205, 205, 212);
     pdf.setLineWidth(0.1);
-    for (let x = 0; x <= cw; x++) {
-      const px = gridX + x * cell;
+    // 线必须跟着 lay.x / lay.y 走：分板时格子之间有板缝，
+    // 按均匀 1 格画会让第 2 块板之后的线逐格偏移（用户说的「格子线偏差」）。
+    const gxList = gridLinePositions(doc.width, bs, gap);
+    for (const gx of gxList) {
+      const px = gridX + (gx - ox) * cell;
+      if (px < gridX - 0.5 || px > gridX + cw * cell + 0.5) continue;
       pdf.line(px, gridY, px, gridY + chh * cell);
     }
-    for (let y = 0; y <= chh; y++) {
-      const py = gridY + y * cell;
+    const gyList = gridLinePositions(doc.height, bs, gap);
+    for (const gy of gyList) {
+      const py = gridY + (gy - oy) * cell;
+      if (py < gridY - 0.5 || py > gridY + chh * cell + 0.5) continue;
       pdf.line(gridX, py, gridX + cw * cell, py);
     }
   }
 
-  // 每 5 格加粗（不分板时才需要，分板时由板框代替）
+  // 每 5 格加粗（同样走 lay 坐标）
   if (opts.grid && bs === 0) {
     pdf.setDrawColor(130, 130, 142);
     pdf.setLineWidth(0.26);
-    for (let x = 0; x <= cw; x += 5) {
-      const px = gridX + x * cell;
+    for (const gx of gridStrongPositions(doc.width, 0, gap)) {
+      if (gx < x0 || gx > x1) continue;
+      const px = gridX + (gx - ox) * cell;
       pdf.line(px, gridY, px, gridY + chh * cell);
     }
-    for (let y = 0; y <= chh; y += 5) {
-      const py = gridY + y * cell;
+    for (const gy of gridStrongPositions(doc.height, 0, gap)) {
+      if (gy < y0 || gy > y1) continue;
+      const py = gridY + (gy - oy) * cell;
       pdf.line(gridX, py, gridX + cw * cell, py);
     }
   }
@@ -1061,7 +1116,7 @@ function pdfSinglePage(pdf: jsPDF, doc: PatternDoc, opts: PdfOptions, pw: number
   if (opts.withHeader) {
     pdfTextSafe(pdf, doc.name || 'Perler Pattern', margin, margin + 4, { sizeMm: 4.2, bold: true });
     const beads = totalBeads(doc);
-    const boardInfo = bs > 0 ? ` · ${lay.cols}×${lay.rows} 块 ${bs}×${bs} 板` : '';
+    const boardInfo = bs > 0 ? ` · 共 ${lay.cols * lay.rows} 块板，每块 ${bs}×${bs} 格` : '';
     pdfTextSafe(
       pdf,
       `${doc.width} × ${doc.height} 格 · ${beads} 颗 · ${doc.palette.length} 色${boardInfo}`,
@@ -1142,7 +1197,7 @@ export function cellAdvice(
   fmt: 'png' | 'svg' | 'pdf',
   o: {
     cellSize?: number;
-    layout?: 'single' | 'boards' | 'tile';
+    layout?: 'single' | 'boards';
     boardSize?: number;
     pageSize?: 'a4' | 'letter';
     orientation?: 'portrait' | 'landscape' | 'auto';
@@ -1326,7 +1381,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     const lay = boardLayout(doc, bs, opts.boardGap ?? 1.2);
     const legendH = opts.legend ? pdfLegendMetrics(usageRows(doc).length, pw - margin * 2).height + 3 : 0;
     const g = pdfSingleGeometry(doc, opts, pw, ph, margin, lay.spanX, lay.spanY, legendH);
-    const boardInfo = bs > 0 ? ` · ${lay.cols}×${lay.rows} 块 ${bs}×${bs} 板` : '';
+    const boardInfo = bs > 0 ? ` · 共 ${lay.cols * lay.rows} 块板，每块 ${bs}×${bs} 格` : '';
     drawHeader(
       doc.name || 'Perler Pattern',
       `${doc.width} × ${doc.height} 格 · ${totalBeads(doc)} 颗 · ${doc.palette.length} 色${boardInfo}`,
@@ -1336,7 +1391,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     gridYmm = g.gridY;
     cellMm = g.cell;
     legendSpanMm = lay.spanY * g.cell;
-  } else if (opts.layout === 'boards') {
+  } else {
     const bs = Math.max(4, opts.boardSize || doc.pegboard || 29);
     const lay = boardLayout(doc, bs, 0);
     const total = lay.cols * lay.rows;
@@ -1358,38 +1413,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     const coordTop = opts.coords ? 3.6 : 0.6;
     const bottom = opts.calibration ? 13 : 6;
     cellMm = Math.max(0.4, Math.min((pw - margin * 2 - coordPad) / bs, (ph - top - margin - bottom - coordTop) / bs));
-    gridXmm = margin + coordPad;
-    gridYmm = top + coordTop;
-    pattern = renderPatternCanvas(part, { ...patOnly, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
-  } else {
-    const chunk = Math.max(8, Math.min(60, opts.maxCellsPerPage));
-    const cols = Math.ceil(doc.width / chunk);
-    const rows = Math.ceil(doc.height / chunk);
-    const total = cols * rows;
-    const idx = Math.min(page, total - 1);
-    const rx = idx % cols;
-    const ry = Math.floor(idx / cols);
-    const x0 = rx * chunk;
-    const y0 = ry * chunk;
-    const cw = Math.min(chunk, doc.width - x0);
-    const chh = Math.min(chunk, doc.height - y0);
-    const part = subDoc(doc, x0, y0, cw, chh);
-
-    let top = margin;
-    drawHeader(
-      `${doc.name || 'Perler Pattern'} · 第 ${idx + 1} 块`,
-      `${doc.width} × ${doc.height} 格 · 块 ${idx + 1}/${total} · 第 ${y0 + 1}-${y0 + chh} 行，第 ${x0 + 1}-${x0 + cw} 列`,
-    );
-    if (opts.withHeader) top += 12.5;
-
-    const coordPad = opts.coords ? 6 : 1.5;
-    const coordTop = opts.coords ? 3.6 : 0.6;
-    const bottom = opts.calibration ? 13 : 6;
-    cellMm = Math.max(
-      0.4,
-      Math.min((pw - margin * 2 - coordPad) / cw, (ph - top - margin - bottom - coordTop) / chh),
-    );
-    gridXmm = margin + coordPad;
+    gridXmm = margin + coordPad + Math.max(0, (pw - margin * 2 - coordPad - bs * cellMm) / 2);
     gridYmm = top + coordTop;
     pattern = renderPatternCanvas(part, { ...patOnly, cellSize: Math.max(1, M(cellMm)), background: null, boardSize: 0 });
   }
@@ -1580,101 +1604,8 @@ export function exportPDF(doc: PatternDoc, opts: PdfOptions) {
 
   if (opts.layout === 'single') {
     pdfSinglePage(pdf, doc, opts, pw, ph, margin);
-  } else if (opts.layout === 'boards') {
-    pdfBoardPages(pdf, doc, opts, pw, ph, margin);
   } else {
-    const chunk = Math.max(8, Math.min(60, opts.maxCellsPerPage));
-    const cols = Math.ceil(doc.width / chunk);
-    const rows = Math.ceil(doc.height / chunk);
-    const totalPages = cols * rows;
-    let pageIndex = 0;
-
-    for (let ry = 0; ry < rows; ry++) {
-      for (let rx = 0; rx < cols; rx++) {
-        if (pageIndex > 0) pdf.addPage();
-        pageIndex++;
-        const x0 = rx * chunk;
-        const y0 = ry * chunk;
-        const x1 = Math.min(doc.width, x0 + chunk);
-        const y1 = Math.min(doc.height, y0 + chunk);
-        const cw = x1 - x0;
-        const chh = y1 - y0;
-
-        let top = margin;
-        if (opts.withHeader) {
-          pdf.setFont('helvetica', 'bold');
-          pdf.setFontSize(13);
-          pdf.setTextColor(20, 20, 28);
-          pdf.text(doc.name || 'Perler Pattern', margin, top + 4);
-          pdf.setFont('helvetica', 'normal');
-          pdf.setFontSize(8);
-          pdf.setTextColor(110, 110, 125);
-          pdf.text(
-            `${doc.width} x ${doc.height} beads  |  block ${rx + 1}-${ry + 1} of ${cols}-${rows}  |  cols ${x0 + 1}-${x1}, rows ${y0 + 1}-${y1}`,
-            margin,
-            top + 9,
-          );
-          top += 13;
-        }
-
-        const availW = pw - margin * 2;
-        const availH = ph - top - margin;
-        const cell = Math.min(availW / (cw + 1.6), availH / (chh + 1.6));
-        // 分块也居中，避免每页都贴在左上角
-        const gridX = margin + Math.max(0, (availW - cw * cell) / 2);
-        const gridY = top + Math.max(0, (availH - chh * cell) / 2);
-
-        for (let y = y0; y < y1; y++) {
-          for (let x = x0; x < x1; x++) {
-            const v = doc.cells[y * doc.width + x];
-            if (!v) continue;
-            const c = doc.palette[v - 1];
-            if (!c) continue;
-            const { r, g, b } = hexRgb(c.hex);
-            pdf.setFillColor(r, g, b);
-            pdf.rect(gridX + (x - x0) * cell, gridY + (y - y0) * cell, cell, cell, 'F');
-          }
-        }
-
-        pdf.setDrawColor(190, 190, 200);
-        pdf.setLineWidth(0.12);
-        for (let x = 0; x <= cw; x++) {
-          const px = gridX + x * cell;
-          pdf.line(px, gridY, px, gridY + chh * cell);
-        }
-        for (let y = 0; y <= chh; y++) {
-          const py = gridY + y * cell;
-          pdf.line(gridX, py, gridX + cw * cell, py);
-        }
-        pdf.setDrawColor(120, 120, 135);
-        pdf.setLineWidth(0.32);
-        for (let x = 0; x <= cw; x += 5) {
-          const px = gridX + x * cell;
-          pdf.line(px, gridY, px, gridY + chh * cell);
-        }
-        for (let y = 0; y <= chh; y += 5) {
-          const py = gridY + y * cell;
-          pdf.line(gridX, py, gridX + cw * cell, py);
-        }
-
-        pdf.setFont('helvetica', 'normal');
-        pdf.setFontSize(Math.max(4.5, Math.min(6.5, cell * 0.42)));
-        pdf.setTextColor(90, 90, 105);
-        for (let x = x0; x < x1; x++) {
-          if ((x - x0) % 5 !== 0 && x !== x1 - 1) continue;
-          pdf.text(String(x + 1), gridX + (x - x0) * cell + cell / 2, gridY - 1.2, { align: 'center' });
-        }
-        for (let y = y0; y < y1; y++) {
-          if ((y - y0) % 5 !== 0 && y !== y1 - 1) continue;
-          pdf.text(String(y + 1), gridX - 1.2, gridY + (y - y0) * cell + cell / 2 + 1, { align: 'right' });
-        }
-
-        pdf.setFontSize(7);
-        pdf.setTextColor(150, 150, 165);
-        pdf.text(`${pageIndex} / ${totalPages}`, pw - margin, ph - 4, { align: 'right' });
-        pdf.text('Perler Studio', margin, ph - 4);
-      }
-    }
+    pdfBoardPages(pdf, doc, opts, pw, ph, margin);
   }
 
   if (opts.withLegend) {

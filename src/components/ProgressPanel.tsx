@@ -83,19 +83,23 @@ export default function ProgressPanel() {
     }
   }, [flags.progressCheck, autoNext, checkColor, rows, setCheckColor, setColorIndex, notify]);
 
-  const share = () => {
-    const res = buildShareUrl(doc);
+  const share = async () => {
+    const res = await buildShareUrl(doc);
+    const saved = res.saved && res.saved > 0 ? `（压缩后短了 ${res.saved} 个字符）` : '';
     const hint = res.tooLong
       ? `链接有点长（${res.length} 字符），有些聊天工具可能会截断，可以改用导出的 PNG / PDF 分享`
-      : '进度链接已复制，发给别人就能看到你拼到哪儿了';
+      : `进度链接已复制${saved}，发给别人就能看到你拼到哪儿了`;
     const done = () => {
       setShareMsg(hint);
       notify(res.tooLong ? '进度链接已复制（偏长）' : '进度链接已复制', res.tooLong ? 'warn' : 'ok');
     };
-    navigator.clipboard?.writeText(res.url).then(done, () => {
+    try {
+      await navigator.clipboard?.writeText(res.url);
+      done();
+    } catch {
+      // 复制失败时把链接摊在面板上，让用户自己选中复制
       setShareMsg(res.url);
-    });
-    // 复制失败时把链接摊在面板上，让用户自己选中复制
+    }
     if (!navigator.clipboard) setShareMsg(res.url);
   };
 

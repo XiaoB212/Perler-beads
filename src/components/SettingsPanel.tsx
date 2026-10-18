@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useEditor } from '../core/store';
 import type { ViewFlags } from '../core/types';
 import type { ThemeMode } from '../core/theme';
@@ -10,12 +10,26 @@ import {
   boardRows,
   boardsOf,
 } from '../core/board';
+import {
+  AUTOSAVE_MAX,
+  AUTOSAVE_MIN,
+  agoText,
+  backupsOf,
+  deleteBackup,
+  loadBackup,
+  pushBackup,
+  type AutoSaveConfig,
+} from '../core/backup';
 import { IconBoard, IconCode, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconMoon, IconRuler, IconSun } from './Icons';
-import ProgressPanel from './ProgressPanel';
 
 interface Props {
   themeMode?: ThemeMode;
   onThemeChange?: (m: ThemeMode) => void;
+  /** 自动保存配置（存在 App 里，改了立刻重启定时器） */
+  autoSave?: AutoSaveConfig;
+  onAutoSaveChange?: (patch: Partial<AutoSaveConfig>) => void;
+  onSaveNow?: () => void;
+  autoSavedAt?: number;
 }
 
 const THEMES: { key: ThemeMode; label: string; icon: (p: { width: number; height: number }) => JSX.Element }[] = [
@@ -37,7 +51,14 @@ const FLAG_ITEMS: { key: keyof ViewFlags; label: string; icon: (p: { width: numb
   { key: 'showCodes', label: '显示色号', icon: (p) => <IconCode {...p} /> },
 ];
 
-export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
+export default function SettingsPanel({
+  themeMode,
+  onThemeChange,
+  autoSave,
+  onAutoSaveChange,
+  onSaveNow,
+  autoSavedAt,
+}: Props) {
   const doc = useEditor((s) => s.doc);
   const flags = useEditor((s) => s.flags);
   const toggleFlag = useEditor((s) => s.toggleFlag);
@@ -52,6 +73,7 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
   const setFocus = useEditor((s) => s.setFocus);
   const focusOnCell = useEditor((s) => s.focusOnCell);
   const hover = useEditor((s) => s.hover);
+  const [backupTick, setBackupTick] = useState(0);
 
   return (
     <div>
@@ -181,12 +203,25 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
         ))}
       </div>
 
-      {flags.progressMode && <ProgressPanel />}
+      {flags.progressMode && (
+        <div className="hint-box" style={{ marginTop: 10 }}>
+          进度模式已开：对色拼装、单色模式、整色完成和进度链接都在右侧「用量」页里，拼的时候不用来回切面板。
+        </div>
+      )}
 
       <div className="divider" />
       <div className="panel-head">
         <span className="panel-title">拼豆板</span>
       </div>
+      <div className="row-toggle" onClick={() => toggleFlag('dblClickFocus')} style={{ marginBottom: 8 }}>
+        <span>双击画布切到某块板</span>
+        <span className={'switch' + (flags.dblClickFocus ? ' on' : '')} />
+      </div>
+      <p className="hint" style={{ marginTop: 0, marginBottom: 10 }}>
+        {flags.dblClickFocus
+          ? '双击某块板就只看那一块；涂色时手抖连着点两下也会跳板，嫌烦可以关掉，只用下面的板号切换。'
+          : '已关掉：画布上怎么双击都不会跳板，只在设置或下面的板号里切换。'}
+      </p>
       <div className="field" style={{ marginBottom: 10 }}>
         <label>单板格数（正方形，横竖相同）</label>
         <div className="seg-wrap">
@@ -256,6 +291,95 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
 
       <div className="divider" />
       <div className="panel-head">
+        <span className="panel-title">自动保存与版本</span>
+      </div>
+      {autoSave && onAutoSaveChange && (
+        <>
+          <div className="row-toggle" onClick={() => onAutoSaveChange({ enabled: !autoSave.enabled })}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>自动保存</span>
+            <span className={'switch' + (autoSave.enabled ? ' on' : '')} />
+          </div>
+          <div className="field" style={{ marginTop: 8, marginBottom: 10 }}>
+            <label>保存间隔</label>
+            <div className="slider-row">
+              <input
+                type="number"
+                className="input"
+                min={1}
+                max={30}
+                value={Math.round(autoSave.interval / 60000)}
+                onChange={(e) => {
+                  const m = Number(e.target.value);
+                  if (Number.isFinite(m)) onAutoSaveChange({ interval: m * 60000 });
+                }}
+                style={{ width: 84 }}
+                title={`${AUTOSAVE_MIN / 1000} 秒到 ${AUTOSAVE_MAX / 60000} 分钟都可以`}
+              />
+              <span className="val">分钟</span>
+              <div className="seg-wrap" style={{ marginLeft: 'auto' }}>
+                {[1, 2, 5, 10].map((m) => (
+                  <button
+                    key={m}
+                    className={Math.round(autoSave.interval / 60000) === m ? 'active' : ''}
+                    onClick={() => onAutoSaveChange({ interval: m * 60000 })}
+                  >
+                    {m} 分
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="hint-box" style={{ marginTop: 6 }}>
+              静默保存，只在角落亮一个小点，不弹提示。关掉页面切走时也会补存一次。
+              {autoSavedAt ? ` 上次保存：${agoText(autoSavedAt)}` : ''}
+            </div>
+          </div>
+
+          <div className="row-toggle" onClick={() => onAutoSaveChange({ backup: !autoSave.backup })}>
+            <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>同时留版本快照</span>
+            <span className={'switch' + (autoSave.backup ? ' on' : '')} />
+          </div>
+          <div className="field" style={{ marginTop: 8, marginBottom: 10 }}>
+            <label>自动快照保留数量</label>
+            <div className="seg-wrap">
+              {[3, 5, 10, 20].map((n) => (
+                <button
+                  key={n}
+                  className={autoSave.keepAuto === n ? 'active' : ''}
+                  onClick={() => onAutoSaveChange({ keepAuto: n })}
+                >
+                  {n} 个
+                </button>
+              ))}
+            </div>
+            <div className="hint-box" style={{ marginTop: 6 }}>
+              超出数量的旧快照会自动删掉。手动存的版本不受这个限制（0 = 一直保留）。
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+            <button className="btn sm" onClick={() => onSaveNow?.()}>
+              立即保存
+            </button>
+            <button
+              className="btn sm"
+              onClick={() => {
+                const id = pushBackup(useEditor.getState().doc, 'manual');
+                useEditor
+                  .getState()
+                  .notify(id ? '已存一个版本快照' : '快照存不下，先删几个旧版本', id ? 'ok' : 'warn');
+                setBackupTick((t) => t + 1);
+              }}
+              title="手动留一个可以随时退回的版本"
+            >
+              存一个版本
+            </button>
+          </div>
+          <BackupList refresh={backupTick} onRefresh={() => setBackupTick((t) => t + 1)} />
+        </>
+      )}
+
+      <div className="divider" />
+      <div className="panel-head">
         <span className="panel-title">备注</span>
       </div>
       <textarea
@@ -266,6 +390,69 @@ export default function SettingsPanel({ themeMode, onThemeChange }: Props) {
         onChange={(e) => setNotes(e.target.value)}
         style={{ fontSize: 12 }}
       />
+    </div>
+  );
+}
+
+/**
+ * 版本列表：能看到每个快照是什么时候、拼了多少颗，点「退回」就恢复成那一版。
+ * 退回是「载入为当前图纸」，原图纸仍然留在本地，所以不会一按就没了。
+ */
+function BackupList({ refresh, onRefresh }: { refresh: number; onRefresh: () => void }) {
+  const doc = useEditor((s) => s.doc);
+  const loadDocument = useEditor((s) => s.loadDocument);
+  const notify = useEditor((s) => s.notify);
+
+  const list = useMemo(() => backupsOf(doc.id), [doc.id, refresh]);
+
+  if (!list.length) {
+    return (
+      <div className="hint-box" style={{ marginBottom: 4 }}>
+        还没有版本快照。开启「同时留版本快照」后会自动留；也可以点上面「存一个版本」手动留一个。
+      </div>
+    );
+  }
+
+  return (
+    <div className="backup-list">
+      <label className="board-picker-label">版本（{list.length} 个 · 最近的在前）</label>
+      {list.map((m) => (
+        <div key={m.id} className="backup-row">
+          <span className={'backup-kind ' + m.kind}>{m.kind === 'auto' ? '自动' : '手动'}</span>
+          <span className="backup-when" title={new Date(m.at).toLocaleString('zh-CN')}>
+            {agoText(m.at)}
+          </span>
+          <span className="backup-stat">
+            {m.placed}/{m.cells} 颗
+          </span>
+          <button
+            className="btn xs"
+            onClick={() => {
+              const d = loadBackup(m.id);
+              if (!d) {
+                notify('这个快照读不出来了', 'warn');
+                return;
+              }
+              loadDocument(d);
+              notify(`已退回 ${agoText(m.at)} 的版本（原有图纸仍在「我的图纸」里）`, 'ok');
+            }}
+          >
+            退回
+          </button>
+          <button
+            className="icon-btn danger"
+            onClick={() => {
+              deleteBackup(m.id);
+              onRefresh();
+              notify('已删除这个版本');
+            }}
+            title="删除这个版本"
+            aria-label="删除版本"
+          >
+            ×
+          </button>
+        </div>
+      ))}
     </div>
   );
 }

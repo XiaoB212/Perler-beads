@@ -1035,7 +1035,9 @@ const checkColor = useEditor((s) => s.checkColor);
           endDrag();
         }}
         onDoubleClick={(e) => {
-          // 双击某块板 = 进入 / 退出「只看这块板」，比分板设置里点按钮快得多
+          // 双击某块板 = 进入 / 退出「只看这块板」，比分板设置里点按钮快得多。
+          // 但画大图时很容易手抖双击，所以留了开关（设置 → 双击切换分板）。
+          if (!flags.dblClickFocus) return;
           if (doc.pegboard <= 0) return;
           const { x, y } = cellFromEvent(e);
           if (!inBounds(x, y)) return;

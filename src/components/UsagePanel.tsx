@@ -3,6 +3,7 @@ import { useEditor } from '../core/store';
 import { IconCheck, IconDownload } from './Icons';
 import { exportCSV } from '../core/export';
 import { costSummary, getDefaultPrice, money, setDefaultPrice } from '../core/cost';
+import ProgressPanel from './ProgressPanel';
 
 export default function UsagePanel() {
   const doc = useEditor((s) => s.doc);
@@ -190,6 +191,16 @@ export default function UsagePanel() {
             <span>单色单价 / 库存</span>
             <b>点色号展开</b>
           </div>
+        </>
+      )}
+
+      {mode === 'usage' && flags.progressMode && (
+        <>
+          <div className="online-banner">
+            <b>线上拼豆模式</b>
+            <span>对色打勾 / 打叉，每格颜色进度都在下面这个面板里；单色模式可以只留一个色号。</span>
+          </div>
+          <ProgressPanel />
         </>
       )}
 

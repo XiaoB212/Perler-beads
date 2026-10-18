@@ -53,8 +53,7 @@ export default function ExportDialog({ onClose }: Props) {
 
   const [pageSize, setPageSize] = useState<'a4' | 'letter'>('a4');
   const [orientation, setOrientation] = useState<'auto' | 'portrait' | 'landscape'>('auto');
-  const [layout, setLayout] = useState<'single' | 'boards' | 'tile'>('single');
-  const [maxCellsPerPage, setMaxCellsPerPage] = useState(32);
+  const [layout, setLayout] = useState<'single' | 'boards'>('single');
   const [withLegend, setWithLegend] = useState(false);
   const [calibration, setCalibration] = useState(true);
   // 拼豆板尺寸：默认跟图纸自身设置一致（不再写死 64 —— 29×29 的图写 64 根本没意义）
@@ -124,13 +123,12 @@ export default function ExportDialog({ onClose }: Props) {
       pageSize,
       orientation,
       layout,
-      maxCellsPerPage,
       withLegend,
       calibration,
       withHeader: true,
       boardSize,
     }),
-    [renderOpts, pageSize, orientation, layout, maxCellsPerPage, withLegend, calibration, boardSize],
+    [renderOpts, pageSize, orientation, layout, withLegend, calibration, boardSize],
   );
 
   const boardCols = boardSize > 0 ? Math.ceil(doc.width / boardSize) : 1;
@@ -158,13 +156,8 @@ export default function ExportDialog({ onClose }: Props) {
   const outW = Math.round(outSpanW * cellSize);
   const outH = Math.round(outSpanH * cellSize);
 
-  // PDF 预览的页数：一板一页 = 板数；分块 = 块数；单页 = 1
-  const pdfPages =
-    layout === 'boards'
-      ? boardTotal
-      : layout === 'tile'
-        ? Math.ceil(doc.width / maxCellsPerPage) * Math.ceil(doc.height / maxCellsPerPage)
-        : 1;
+  // PDF 预览的页数：一板一页 = 板数；单页 = 1
+  const pdfPages = layout === 'boards' ? boardTotal : 1;
   const [pdfPage, setPdfPage] = useState(0);
   useEffect(() => {
     if (pdfPage > pdfPages - 1) setPdfPage(0);
@@ -338,11 +331,6 @@ export default function ExportDialog({ onClose }: Props) {
                           每块板 1 页，共 {boardTotal} 页 ·{' '}
                           {boardSize > 0 ? `${boardSize} × ${boardSize}` : `${doc.pegboard} × ${doc.pegboard}`}{' '}
                           格一块板 · 可 1:1 打印后逐块拼装
-                        </>
-                      )}
-                      {layout === 'tile' && (
-                        <>
-                          {pdfPages} 页 · 每页 {maxCellsPerPage} × {maxCellsPerPage} 格分块
                         </>
                       )}
                     </div>
@@ -599,14 +587,12 @@ export default function ExportDialog({ onClose }: Props) {
                       <button className={layout === 'boards' ? 'active' : ''} onClick={() => setLayout('boards')}>
                         一板一页
                       </button>
-                      <button className={layout === 'tile' ? 'active' : ''} onClick={() => setLayout('tile')}>
-                        分块
-                      </button>
                     </div>
                     <span className="hint">
-                      {layout === 'single' && '整张图纸缩放进一张纸，一眼看全；大图会画出板框与板号'}
-                      {layout === 'boards' && '按实体拼豆板切分，每块板一页，可 1:1 打印后逐块拼装'}
-                      {layout === 'tile' && '按每页格数硬切，适合需要放大对照的场景'}
+                      {layout === 'single' &&
+                        '一张纸看全整幅图，自动缩放；大图会画出板框与板号，但格子会变小'}
+                      {layout === 'boards' &&
+                        `按「拼豆板尺寸」切成一板一页，每块板单独一页、格子放到最大，可 1:1 打印后逐块拼装（当前 ${boardTotal} 页）`}
                     </span>
                   </div>
                   <div className="field">
@@ -640,22 +626,6 @@ export default function ExportDialog({ onClose }: Props) {
                       </button>
                     </div>
                   </div>
-                  {layout === 'tile' && (
-                    <div className="field">
-                      <label>每页格数</label>
-                      <div className="slider-row">
-                        <input
-                          type="range"
-                          min={10}
-                          max={60}
-                          step={2}
-                          value={maxCellsPerPage}
-                          onChange={(e) => setMaxCellsPerPage(Number(e.target.value))}
-                        />
-                        <span className="val">{maxCellsPerPage}</span>
-                      </div>
-                    </div>
-                  )}
                   <div className="check-row" onClick={() => setCalibration((v) => !v)}>
                     <span className={'checkbox' + (calibration ? ' on' : '')}>
                       <IconCheck width={11} height={11} />

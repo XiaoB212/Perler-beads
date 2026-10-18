@@ -43,9 +43,17 @@ import type { Tool } from './core/types';
 import { eventToBinding, keyLabel, loadKeymap, resolveAction, type KeyMap } from './core/keymap';
 import { docToThumb, parseProject, totalBeads } from './core/export';
 import { readIndex, saveDoc } from './core/storage';
+import {
+  AUTOSAVE_MAX,
+  AUTOSAVE_MIN,
+  pushBackup,
+  readAutoSaveConfig,
+  writeAutoSaveConfig,
+  type AutoSaveConfig,
+} from './core/backup';
 import { boardCount } from './core/board';
 import { DEFAULT_PALETTE_KEY, palettePreset } from './core/palette';
-import { SHARE_PREFIX, decodeShare, progressStat } from './core/share';
+import { decodeShare, progressStat } from './core/share';
 
 type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys';
 type SideTab = 'colors' | 'usage' | 'settings';
@@ -119,6 +127,31 @@ export default function App() {
   const [resolved, setResolved] = useState(() => resolveTheme(getThemeMode()));
   const [sideW, setSideW] = useState(() => readSideWidth());
   const sideDragRef = useRef<{ x: number; w: number; next: number } | null>(null);
+  // 自动保存与版本：配置存 localStorage，改了立刻生效，不用刷新
+  const [autoSave, setAutoSave] = useState<AutoSaveConfig>(() => readAutoSaveConfig());
+  const [autoSavedAt, setAutoSavedAt] = useState(0);
+  const updateAutoSave = useCallback((patch: Partial<AutoSaveConfig>) => {
+    setAutoSave((cur) => {
+      const next = { ...cur, ...patch };
+      if (Number.isFinite(next.interval)) {
+        next.interval = Math.max(AUTOSAVE_MIN, Math.min(AUTOSAVE_MAX, Math.round(next.interval)));
+      }
+      writeAutoSaveConfig(next);
+      return next;
+    });
+  }, []);
+  const saveNow = useCallback(() => {
+    const s = useEditor.getState();
+    const d = s.doc;
+    const ok = saveDoc(d, docToThumb(d, 200));
+    if (ok) {
+      s.markClean();
+      setAutoSavedAt(Date.now());
+      notify('已保存到本地');
+    } else {
+      notify('本地空间不足，先删掉几份旧图纸', 'warn');
+    }
+  }, [notify]);
 
   useEffect(() => setTitleDraft(doc.name), [doc.name, doc.id]);
 
@@ -184,49 +217,72 @@ export default function App() {
     }
   }, []);
 
-  // 分享链接（#p=…）：打开就能看到对方拼到哪儿了
+  // 分享链接（#progress=… 或老版 #p=…）：打开就能看到对方拼到哪儿了
   useEffect(() => {
     const hash = window.location.hash;
-    if (!hash.startsWith(SHARE_PREFIX)) return;
-    const shared = decodeShare(hash);
-    if (shared) {
-      const pal = shared.palette.length ? shared.palette : palettePreset(DEFAULT_PALETTE_KEY);
-      const now = Date.now();
-      loadDocument({
-        id: `share-${now.toString(36)}`,
-        name: shared.name,
-        width: shared.width,
-        height: shared.height,
-        pegboard: shared.pegboard,
-        palette: pal,
-        cells: shared.cells,
-        progress: shared.progress,
-        createdAt: now,
-        updatedAt: shared.updatedAt || now,
-        notes: '',
-      });
-      const stat = progressStat(shared.cells, shared.progress);
-      notify(`已打开分享的图纸「${shared.name}」· 拼了 ${stat.placed} / ${stat.total} 颗`, 'ok');
-    } else {
-      notify('这个分享链接读不出来（链接可能被截断了）', 'warn');
-    }
-    // 读完就把 hash 清掉，之后的编辑与自动保存才不会被链接反复覆盖
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    let cancelled = false;
+    const open = async () => {
+      const shared = await decodeShare(hash);
+      if (cancelled) return;
+      if (shared) {
+        const pal = shared.palette.length ? shared.palette : palettePreset(DEFAULT_PALETTE_KEY);
+        const now = Date.now();
+        loadDocument({
+          id: `share-${now.toString(36)}`,
+          name: shared.name,
+          width: shared.width,
+          height: shared.height,
+          pegboard: shared.pegboard,
+          palette: pal,
+          cells: shared.cells,
+          progress: shared.progress,
+          createdAt: now,
+          updatedAt: shared.updatedAt || now,
+          notes: '',
+        });
+        const stat = progressStat(shared.cells, shared.progress);
+        notify(`已打开分享的图纸「${shared.name}」· 拼了 ${stat.placed} / ${stat.total} 颗`, 'ok');
+      } else {
+        notify('这个分享链接读不出来（链接可能被截断了）', 'warn');
+      }
+      // 读完就把 hash 清掉，之后的编辑与自动保存才不会被链接反复覆盖
+      window.history.replaceState(null, '', window.location.pathname + window.location.search);
+    };
+    if (hash.startsWith('#progress=') || hash.startsWith('#p=')) void open();
+    return () => {
+      cancelled = true;
+    };
   }, [loadDocument, notify]);
 
-  // 自动保存（3 秒防抖）
+  // 自动保存：默认每 2 分钟静默存一次（不弹提示，只在顶部状态区亮个小点）。
+  // 以前是每次改动 2.6 秒就写 localStorage，大图纸上画画会卡；现在攒够间隔再落盘。
+  // 同时按配置留版本快照，画崩了能退回任意一版。
   useEffect(() => {
-    if (!dirty) return;
-    const t = window.setTimeout(() => {
+    if (!autoSave.enabled) return;
+    const tick = () => {
+      const s = useEditor.getState();
+      if (!s.dirty) return;
+      const d = s.doc;
       try {
-        saveDoc(useEditor.getState().doc, docToThumb(useEditor.getState().doc, 200));
-        useEditor.getState().markClean();
+        const ok = saveDoc(d, docToThumb(d, 200));
+        if (ok) s.markClean();
+        setAutoSavedAt(Date.now());
       } catch {
-        /* 忽略配额错误 */
+        /* 配额满了就算了，不打断画画 */
       }
-    }, 2600);
-    return () => window.clearTimeout(t);
-  }, [dirty, doc]);
+      if (autoSave.backup) pushBackup(d, 'auto');
+    };
+    // 页面隐藏时补存一次，避免关机前那段没写到
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') tick();
+    };
+    const id = window.setInterval(tick, Math.max(AUTOSAVE_MIN, autoSave.interval));
+    document.addEventListener('visibilitychange', onHide);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener('visibilitychange', onHide);
+    };
+  }, [autoSave.enabled, autoSave.interval, autoSave.backup]);
 
   // 全局拖拽落图：图片 → 以图生图；.perler.json → 直接打开工程
   useEffect(() => {
@@ -323,12 +379,7 @@ export default function App() {
           return;
         case 'file.save': {
           e.preventDefault();
-          const d = s.doc;
-          const ok = saveDoc(d, docToThumb(d, 200));
-          if (ok) {
-            s.markClean();
-            notify('已保存到本地');
-          } else notify('本地空间不足', 'warn');
+          saveNow();
           return;
         }
         case 'file.export':
@@ -451,7 +502,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [undo, redo, setTool, notify, toggleFlag, doc.palette, setColorIndex, requestFit, keymap]);
+  }, [undo, redo, setTool, notify, toggleFlag, doc.palette, setColorIndex, requestFit, keymap, saveNow]);
 
   const colorIndex = useEditor((s) => s.colorIndex);
   const cur = doc.palette[colorIndex];
@@ -468,7 +519,16 @@ export default function App() {
         />
       );
     if (t === 'usage') return <UsagePanel />;
-    return <SettingsPanel themeMode={themeMode} onThemeChange={setThemeMode} />;
+    return (
+      <SettingsPanel
+        themeMode={themeMode}
+        onThemeChange={setThemeMode}
+        autoSave={autoSave}
+        onAutoSaveChange={updateAutoSave}
+        onSaveNow={saveNow}
+        autoSavedAt={autoSavedAt}
+      />
+    );
   };
 
   return (
@@ -781,6 +841,17 @@ export default function App() {
                 {t.label}
               </button>
             ))}
+            <button
+              className={'mtool' + (tool === 'picker' ? ' active' : '')}
+              onClick={() => setTool('picker')}
+            >
+              <IconPicker width={19} height={19} />
+              吸管
+            </button>
+            <button className={'mtool' + (tool === 'pan' ? ' active' : '')} onClick={() => setTool('pan')}>
+              <IconHand width={19} height={19} />
+              拖动
+            </button>
             <button
               className={'mtool' + (flags.progressMode ? ' active' : '')}
               onClick={() => toggleFlag('progressMode')}

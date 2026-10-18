@@ -5,7 +5,7 @@ import { BUILTIN_PALETTES, BRAND_LABEL, PALETTE_KEYS, palettePreset } from '../c
 import type { BeadColor } from '../core/types';
 import { IconCheck, IconClose, IconImage, IconUpload, IconWand } from './Icons';
 import { renderPatternCanvas } from '../core/export';
-import { PEGBOARD_MAX, PEGBOARD_PRESETS, CANVAS_MAX, clampPegboard } from '../core/board';
+import { PEGBOARD_MAX, PEGBOARD_PRESETS, CANVAS_MAX, DEFAULT_PEGBOARD, clampPegboard } from '../core/board';
 
 interface Props {
   onClose: () => void;
@@ -74,16 +74,22 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   // 尺寸按「真实的拼豆板」来定：单板格数 × 横纵板数。
   // 之前只有一个「画布宽度（格）」滑杆，用户拿到 64×64 的图根本不知道自己要用几块板，
   // 预览里也没有分板线，所以才会说「完全不是按照板子数量分的」。
-  const [boardSize, setBoardSize] = useState(29);
+  const [boardSize, setBoardSize] = useState(DEFAULT_PEGBOARD);
+  // 允许把单板格数清空重填（和板数输入一样，以前删不掉 0）
+  const [boardText, setBoardText] = useState(String(DEFAULT_PEGBOARD));
   const [cols, setCols] = useState(2);
   const [rows, setRows] = useState(2);
+  // 锁定正方形：调一个另一个跟着动（拼豆板本身就是方的，默认锁上更符合直觉）
+  const [lockSquare, setLockSquare] = useState(true);
   const [dither, setDither] = useState(0.5);
   const [ditherMode, setDitherMode] = useState<'none' | 'fs' | 'ordered'>('fs');
   const [sample, setSample] = useState<Sample>('average');
   const [brightness, setBrightness] = useState(1);
   const [contrast, setContrast] = useState(1);
   const [saturation, setSaturation] = useState(1);
-  const [transparentWhite, setTransparentWhite] = useState(true);
+  // 白底处理默认关闭：默认开着会把人物高光、白衣、眼睛反光挖成洞，
+  // 用户看到的「中间一块块没色号」多数就是这么来的。需要去白底再手动打开。
+  const [transparentWhite, setTransparentWhite] = useState(false);
   const [whiteThreshold, setWhiteThreshold] = useState(242);
   // 参考比例（1 颗豆 ≈ 原图几个像素）与豆子规格：只当辅助参考，帮用户估成品多大
   const [ratioText, setRatioText] = useState('2');
@@ -128,11 +134,27 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   /** 原图每个像素大约对应多大一块豆子（越小越精细） */
   const pxPerBead = img ? img.naturalWidth / Math.max(1, width) : 0;
 
-  /** 按「1 颗豆 ≈ N 个原图像素」反推需要几块板 */
+  /** 按「1 颗豆 ≈ N 个原图像素」反推板数；单板格数也跟着自动挑一档 */
   const applyRatio = (r: number) => {
     if (!img || !Number.isFinite(r) || r <= 0) return;
-    const c = Math.max(1, Math.min(maxTiles, Math.round(img.naturalWidth / r / boardSize)));
-    const rw = Math.max(1, Math.min(maxTiles, Math.round(img.naturalHeight / r / boardSize)));
+    const targetW = Math.max(1, Math.round(img.naturalWidth / r));
+    const targetH = Math.max(1, Math.round(img.naturalHeight / r));
+    // 板子往大了挑：先试最大的板规格，板数会超过 8×8 就换小一档，
+    // 这样「单板格数」会自己跟着参考比例变，不用手调两次。
+    const candidates = BOARD_SIZES.map((p) => p.value)
+      .filter((v) => v <= CANVAS_MAX)
+      .sort((a, b) => b - a);
+    let picked = boardSize;
+    for (const v of candidates) {
+      if (Math.ceil(targetW / v) <= 8 && Math.ceil(targetH / v) <= 8) {
+        picked = v;
+        break;
+      }
+    }
+    const c = Math.max(1, Math.min(16, Math.ceil(targetW / picked)));
+    const rw = Math.max(1, Math.min(16, Math.ceil(targetH / picked)));
+    setBoardSize(picked);
+    setBoardText(String(picked));
     setCols(c);
     setRows(rw);
     setColsText(String(c));
@@ -372,10 +394,24 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                       className="input"
                       min={2}
                       max={PEGBOARD_MAX}
-                      value={boardSize}
+                      value={boardText}
                       onChange={(e) => {
-                        const v = Number(e.target.value);
-                        setBoardSize(clampPegboard(Number.isFinite(v) ? v : 29) || 29);
+                        // 只改文本，允许清空重填；真正生效在 onChange 里做温和夹取
+                        const raw = e.target.value;
+                        setBoardText(raw);
+                        if (raw.trim() === '') return;
+                        const v = Number(raw);
+                        if (!Number.isFinite(v)) return;
+                        setBoardSize(clampPegboard(v) || DEFAULT_PEGBOARD);
+                      }}
+                      onBlur={() => {
+                        if (boardText.trim() === '') {
+                          setBoardText(String(boardSize));
+                          return;
+                        }
+                        const v = clampPegboard(Number(boardText)) || DEFAULT_PEGBOARD;
+                        setBoardSize(v);
+                        setBoardText(String(v));
                       }}
                       style={{ width: 88 }}
                     />
@@ -386,7 +422,10 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                       <button
                         key={p.value}
                         className={boardSize === p.value ? 'active' : ''}
-                        onClick={() => setBoardSize(p.value)}
+                        onClick={() => {
+                          setBoardSize(p.value);
+                          setBoardText(String(p.value));
+                        }}
                         title={`每块板 ${p.value} × ${p.value} 格${p.note ? ' · ' + p.note : ''}`}
                       >
                         {p.value}
@@ -406,11 +445,21 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                       onText={(s) => {
                         setColsText(s);
                         const n = parseTiles(s);
-                        if (n != null) setCols(n);
+                        if (n != null) {
+                          setCols(n);
+                          if (lockSquare) {
+                            setRows(n);
+                            setRowsText(String(n));
+                          }
+                        }
                       }}
                       onCommit={(n) => {
                         setCols(n);
                         setColsText(String(n));
+                        if (lockSquare) {
+                          setRows(n);
+                          setRowsText(String(n));
+                        }
                       }}
                     />
                     <TileStepper
@@ -421,14 +470,36 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                       onText={(s) => {
                         setRowsText(s);
                         const n = parseTiles(s);
-                        if (n != null) setRows(n);
+                        if (n != null) {
+                          setRows(n);
+                          if (lockSquare) {
+                            setCols(n);
+                            setColsText(String(n));
+                          }
+                        }
                       }}
                       onCommit={(n) => {
                         setRows(n);
                         setRowsText(String(n));
+                        if (lockSquare) {
+                          setCols(n);
+                          setColsText(String(n));
+                        }
                       }}
                     />
                   </div>
+                  <label className="checkbox-line" style={{ marginTop: 6 }}>
+                    <span
+                      className={'checkbox' + (lockSquare ? ' on' : '')}
+                      onClick={() => setLockSquare((v) => !v)}
+                      role="checkbox"
+                      aria-checked={lockSquare}
+                      tabIndex={0}
+                    >
+                      {lockSquare && <IconCheck width={11} height={11} />}
+                    </span>
+                    <span onClick={() => setLockSquare((v) => !v)}>锁定正方形（调一个，另一个跟着动）</span>
+                  </label>
                   <span className="hint">
                     {cols} × {rows} = {cols * rows} 块 {boardSize}×{boardSize} 板，合计 {width} × {height} 格
                   </span>
