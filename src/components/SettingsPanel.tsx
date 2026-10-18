@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../core/store';
 import type { ViewFlags } from '../core/types';
 import type { ThemeMode } from '../core/theme';
@@ -205,11 +205,11 @@ export default function SettingsPanel({
 
       {flags.onlineMode ? (
         <div className="hint-box" style={{ marginTop: 10 }}>
-          线上拼豆模式已开：对色判对错、单色高亮、整色完成、进度环和进度链接都在右侧「用量」页里，拼的时候不用来回切面板。
+          线上拼豆模式已开：画布上点格子会按色号判对错，对色面板、单色高亮、整色完成、进度环和进度链接都在右侧「用量」页里。
         </div>
       ) : flags.progressMode ? (
         <div className="hint-box" style={{ marginTop: 10 }}>
-          进度模式只是「点格子打个勾」。想照着图纸一颗颗对色拼，去右侧「用量」页打开「线上拼豆模式」。
+          进度模式只管「点格子打个勾」，不判色号。想对色（手上豆子跟格子色号对不对），去右侧「用量」页打开「线上拼豆模式」。
         </div>
       ) : null}
 
@@ -464,7 +464,8 @@ function BackupList({ refresh, onRefresh }: { refresh: number; onRefresh: () => 
 /**
  * 板号选择器：把所有实体板排成一张缩略图，点哪块就只看哪块。
  * 之前只能「双击画布上的板」或「聚焦光标处」，板多了根本找不到想拼的那块，
- * 所以这里按真实网格排出来，顺便用底色深浅标出每块板拼了多少。
+ * 所以这里按真实网格排出来，每块板直接画出它自己的样子（1 格 1 像素，CSS 放大），
+ * 一眼就能认出「右上角那块是小猫的脸」。
  */
 function BoardPicker() {
   const doc = useEditor((s) => s.doc);
@@ -477,7 +478,7 @@ function BoardPicker() {
   );
   const cols = boardCols(doc.width, doc.pegboard);
 
-  // 每块板的已拼比例：0 = 还没动，1 = 拼完了，给板号上色用
+  // 每块板的已拼比例：0 = 还没动，1 = 拼完了，给板号做角标用
   const ratios = useMemo(() => {
     const out = new Map<number, number>();
     for (const b of boards) {
@@ -515,7 +516,8 @@ function BoardPicker() {
               onClick={() => setFocus(on ? null : { size: doc.pegboard, col: b.col, row: b.row })}
               title={`${b.label} 板 · 已拼 ${Math.round(r * 100)}%`}
             >
-              <i style={{ opacity: 0.12 + r * 0.85 } as React.CSSProperties} />
+              <BoardThumb x={b.x} y={b.y} w={b.w} h={b.h} />
+              {r > 0 && <i className="board-fill" style={{ width: `${Math.round(r * 100)}%` } as React.CSSProperties} />}
               <span>{b.label}</span>
             </button>
           );
@@ -523,4 +525,40 @@ function BoardPicker() {
       </div>
     </div>
   );
+}
+
+/** 一块板的迷你图：1 格画 1 像素，交给 CSS 放大，不做缩放抗锯齿 */
+function BoardThumb({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const doc = useEditor((s) => s.doc);
+  const ref = useRef<HTMLCanvasElement>(null);
+
+  useEffect(() => {
+    const cv = ref.current;
+    if (!cv) return;
+    const ctx = cv.getContext('2d');
+    if (!ctx) return;
+    if (cv.width !== w) cv.width = w;
+    if (cv.height !== h) cv.height = h;
+    const img = ctx.createImageData(w, h);
+    const d = img.data;
+    for (let yy = 0; yy < h; yy++) {
+      for (let xx = 0; xx < w; xx++) {
+        const i = (y + yy) * doc.width + (x + xx);
+        const v = doc.cells[i];
+        const p = (yy * w + xx) * 4;
+        if (!v) {
+          d[p + 3] = 0;
+          continue;
+        }
+        const hex = doc.palette[v - 1]?.hex ?? '#000000';
+        d[p] = parseInt(hex.slice(1, 3), 16);
+        d[p + 1] = parseInt(hex.slice(3, 5), 16);
+        d[p + 2] = parseInt(hex.slice(5, 7), 16);
+        d[p + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }, [doc, x, y, w, h]);
+
+  return <canvas ref={ref} className="board-thumb" width={w} height={h} aria-hidden />;
 }

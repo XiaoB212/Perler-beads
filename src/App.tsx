@@ -219,11 +219,12 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
     }
   }, []);
 
-  // 分享链接（#p=…）：打开就能看到对方拼到哪儿了
+  // 分享链接（#p=…）：打开就能看到对方拼到哪儿了。
+  // 首次挂载要处理，另外粘到已经打开的页面里只会触发 hashchange、不会重载，
+  // 所以两种时机都要接。
   useEffect(() => {
-    const hash = window.location.hash;
     let cancelled = false;
-    const open = async () => {
+    const open = async (hash: string) => {
       const shared = await decodeShare(hash);
       if (cancelled) return;
       if (shared) {
@@ -250,9 +251,15 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
       // 读完就把 hash 清掉，之后的编辑与自动保存才不会被链接反复覆盖
       window.history.replaceState(null, '', window.location.pathname + window.location.search);
     };
-    if (hash.startsWith('#p=')) void open();
+    const check = () => {
+      const hash = window.location.hash;
+      if (hash.startsWith('#p=')) void open(hash);
+    };
+    check();
+    window.addEventListener('hashchange', check);
     return () => {
       cancelled = true;
+      window.removeEventListener('hashchange', check);
     };
   }, [loadDocument, notify]);
 

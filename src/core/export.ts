@@ -3,8 +3,10 @@ import type { BeadColor, PatternDoc, ProjectFile } from './types';
 import { readableTextColor } from './color';
 import { rleDecode, rleDecodeU8, rleEncode } from './rle';
 import { downloadBlob, downloadText, safeFileName } from './util';
+import { blobToBytes, buildZip, textToBytes } from './zip';
 import { getDefaultPrice } from './cost';
 import { PEGBOARD_PRESETS } from './board';
+import { qrPixelSize, qrSvgGroup, renderQrCanvas } from './qr';
 
 export interface RenderOptions {
   cellSize: number;
@@ -31,6 +33,13 @@ export interface RenderOptions {
   fitWindow?: boolean;
   /** 豆子形状：方格（默认）或圆格 */
   shape?: 'square' | 'circle';
+  /**
+   * 在导出件上印一张二维码。分享链接动辄几百上千字符，扫码比复制粘贴稳，
+   * 所以导出件默认带一张指向项目的二维码。
+   */
+  qr?: boolean;
+  /** 二维码内容，默认就是水印地址 */
+  qrText?: string;
 }
 
 /** 默认水印文案与地址，导出面板里可以改 */
@@ -53,6 +62,7 @@ export const DEFAULT_RENDER: RenderOptions = {
   watermarkUrl: DEFAULT_WATERMARK_URL,
   fitWindow: true,
   shape: 'square',
+  qr: true,
 };
 
 /** 色号用量：按颗数从多到少排，跳过色板里没用到的项 */
@@ -223,9 +233,14 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
   const legendScale = legendScaleFor(cs, bodyW, 0.55, 1.35);
   const leg = opts.legend && detailed ? legendMetrics(rows.length, bodyW - pad * 2, legendScale) : null;
   const wmH = opts.watermark && detailed ? watermarkHeight(legendScale) : 0;
+  // 二维码：塞在右下角，跟水印同一行。链接几百上千字符时扫码比复制粘贴可靠得多。
+  const qrText = opts.qrText || opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+  const qrMod = Math.max(2, Math.round(2 * legendScale));
+  const qrPx = opts.qr && detailed ? qrPixelSize(qrText, qrMod, 2) : 0;
+  const footH = Math.max(wmH, qrPx);
 
   const w = bodyW;
-  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + wmH;
+  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + footH;
 
   const canvas = document.createElement('canvas');
   canvas.width = Math.max(1, Math.round(w));
@@ -458,15 +473,21 @@ export function renderPatternCanvas(doc: PatternDoc, opts: RenderOptions): HTMLC
     ctx.moveTo(pad, cursorY + 2);
     ctx.lineTo(w - pad, cursorY + 2);
     ctx.stroke();
+    // 二维码占右边一块，文字就别铺到它身上
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.font = `400 ${Math.round(8.4 * s)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
-    ctx.fillText(text, pad, cursorY + wmH * 0.62);
-    ctx.textAlign = 'right';
+    ctx.fillText(text, pad, cursorY + footH * 0.42);
     ctx.fillStyle = 'rgba(0,0,0,0.42)';
     ctx.font = `400 ${Math.round(8 * s)}px ui-monospace, monospace`;
-    ctx.fillText(url.replace(/^https?:\/\//, ''), w - pad, cursorY + wmH * 0.62);
+    ctx.fillText(url.replace(/^https?:\/\//, ''), pad, cursorY + footH * 0.42 + 11 * s);
+  }
+
+  // 二维码：右下角一枚，扫码就能打开项目 / 分享的图纸
+  if (qrPx > 0 && footH > 0) {
+    const qr = renderQrCanvas(qrText, { moduleSize: qrMod, margin: 2 });
+    if (qr) ctx.drawImage(qr, w - pad - qrPx, cursorY + (footH - qrPx) / 2);
   }
 
   // 用量表 / 水印区域在缩略图尺寸下会被压得看不清，干脆不画
@@ -519,9 +540,12 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
   const s = legendScaleFor(cs, bodyW, 0.8, 1.6);
   const leg = opts.legend ? legendMetrics(rows.length, bodyW - pad * 2, s) : null;
   const wmH = opts.watermark ? watermarkHeight(s) : 0;
+  const qrText = opts.qrText || opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+  const qrPx = opts.qr ? qrPixelSize(qrText, Math.max(2, Math.round(2 * s)), 2) : 0;
+  const footH = Math.max(wmH, qrPx);
 
   const w = bodyW;
-  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + wmH;
+  const h = padTop + gridH + padBottom + (leg ? leg.height : 0) + footH;
   const out: string[] = [];
   out.push(`<?xml version="1.0" encoding="UTF-8"?>`);
   // fitWindow：直接用百分比宽高，浏览器打开就按窗口铺满并居中，不再贴在左上角
@@ -709,15 +733,24 @@ export function buildSVG(doc: PatternDoc, opts: RenderOptions): string {
     out.push(
       `<line x1="${pad}" y1="${cursorY + 2}" x2="${w - pad}" y2="${cursorY + 2}" stroke="rgba(0,0,0,0.12)" stroke-width="0.7"/>`,
     );
+    // 二维码占了右下角，文字缩到左下角两行，互不遮挡
     out.push(
-      `<text x="${pad}" y="${cursorY + wmH * 0.68}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.5)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}</text>`,
+      `<text x="${pad}" y="${cursorY + footH * 0.4}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.5)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}</text>`,
     );
-    // 用 <a> 包住整段（署名 + 地址），SVG 在浏览器里打开可以直接点开项目。
+    out.push(
+      `<a href="${escapeXml(url)}" target="_blank" rel="noopener"><text x="${pad}" y="${cursorY + footH * 0.4 + 11 * s}" font-size="${8 * s}" fill="rgba(0,0,0,0.42)" font-family="ui-monospace, monospace">${escapeXml(url.replace(/^https?:\/\//, ''))}</text></a>`,
+    );
+    // 用 <a> 包住地址，SVG 在浏览器里打开可以直接点开项目。
     // 不再用蓝色、不再加下划线，整段同色，和图纸本身保持安静。
-    out.push(
-      `<a href="${escapeXml(url)}" target="_blank" rel="noopener"><text x="${pad}" y="${cursorY + wmH * 0.68}" font-size="${8.4 * s}" fill="rgba(0,0,0,0.38)" font-family="'PingFang SC','Microsoft YaHei',system-ui,sans-serif">${escapeXml(text)}  ${escapeXml(url.replace(/^https?:\/\//, ''))}</text></a>`,
-    );
     out.push(`</g>`);
+  }
+  // 二维码：右下角，扫码直接打开项目 / 分享的图纸
+  if (qrPx > 0) {
+    const group = qrSvgGroup(qrText, w - pad - qrPx, cursorY + (footH - qrPx) / 2, qrPx, {
+      moduleSize: Math.max(2, Math.round(2 * s)),
+      margin: 2,
+    });
+    if (group) out.push(group);
   }
   out.push(`</svg>`);
   return out.join('\n');
@@ -1002,11 +1035,36 @@ function pdfFooter(pdf: jsPDF, opts: PdfOptions, pw: number, ph: number, margin:
     // 用户明确要求「导出的 PDF 能直接点击跳转」，所以必须走 textWithLink 而不是 text。
     pdf.textWithLink(short, margin + textW + 2, wmY, { url, align: 'left' });
   }
+  // 二维码：塞在页脚右端，跟「Perler Studio」同一带。
+  // 链接动辄几百上千字符，PDF 里又不可能让人手抄，二维码是唯一能真的用起来的分享方式。
+  const qrText = opts.qrText || opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+  const qrSize = 15;
+  let qrDrawn = false;
+  if (opts.qr) {
+    const qr = renderQrCanvas(qrText, { moduleSize: 3, margin: 2 });
+    if (qr) {
+      const qx = pw - margin - qrSize;
+      const qy = footY - qrSize + 3;
+      try {
+        pdf.addImage(qr.toDataURL('image/png'), 'PNG', qx, qy, qrSize, qrSize);
+        pdf.setFont('helvetica', 'normal');
+        pdf.setFontSize(4.2);
+        pdf.setTextColor(150, 150, 164);
+        pdf.text('扫码看图纸', qx + qrSize / 2, qy + qrSize + 2.6, { align: 'center' });
+        pdf.link(qx, qy, qrSize, qrSize, { url: qrText });
+        qrDrawn = true;
+      } catch {
+        // 极少数情况下 canvas 拿不到 2d context，静默跳过，不影响主图
+      }
+    }
+  }
   pdf.setFont('helvetica', 'normal');
   pdf.setFontSize(6.5);
   pdf.setTextColor(150, 150, 165);
-  if (pageText) pdf.text(pageText, pw - margin - 18, footY + 0.6, { align: 'right' });
-  pdf.text('Perler Studio', pw - margin, footY + 0.6, { align: 'right' });
+  // 有二维码时文字整体左移，避免压在码上
+  const rightEdge = qrDrawn ? pw - margin - qrSize - 5 : pw - margin;
+  if (pageText) pdf.text(pageText, rightEdge - 18, footY + 0.6, { align: 'right' });
+  pdf.text('Perler Studio', rightEdge, footY + 0.6, { align: 'right' });
 }
 
 /** PDF 页面几何：导出与预览共用同一套数字，保证「预览即所得」 */
@@ -1327,6 +1385,125 @@ export function exportBoardImagesSVG(doc: PatternDoc, opts: RenderOptions) {
   return { files: total };
 }
 
+/** 一块板的子图（预览、打包都要用），index 超出范围时返回 null */
+function boardSlice(doc: PatternDoc, boardSize: number, col: number, row: number) {
+  const bs = Math.max(4, boardSize || doc.pegboard || 29);
+  const cols = Math.ceil(doc.width / bs);
+  const rows = Math.ceil(doc.height / bs);
+  if (col < 0 || row < 0 || col >= cols || row >= rows) return null;
+  const x0 = col * bs;
+  const y0 = row * bs;
+  const w = Math.min(doc.width, x0 + bs) - x0;
+  const h = Math.min(doc.height, y0 + bs) - y0;
+  return {
+    sub: subDoc(doc, x0, y0, w, h),
+    x0,
+    y0,
+    w,
+    h,
+    label: boardLabel(col, row),
+    index: row * cols + col + 1,
+    total: cols * rows,
+  };
+}
+
+/** 分板预览：把第 col/row 块板单独渲染成一张图，用于导出面板里逐块翻看 */
+export function renderBoardCanvas(
+  doc: PatternDoc,
+  opts: RenderOptions,
+  col: number,
+  row: number,
+  maxPx = 460,
+): HTMLCanvasElement | null {
+  const slice = boardSlice(doc, opts.boardSize ?? 0, col, row);
+  if (!slice) return null;
+  const want = Math.max(3, Math.min(opts.cellSize || 24, Math.floor(maxPx / Math.max(slice.w, slice.h))));
+  return renderPatternCanvas(slice.sub, {
+    ...opts,
+    cellSize: want,
+    boardSize: 0,
+    coords: false,
+    title: undefined,
+  });
+}
+
+/** 一块板的 SVG 文本（打包用） */
+function boardSvg(
+  doc: PatternDoc,
+  opts: RenderOptions,
+  boardSize: number,
+  col: number,
+  row: number,
+): { name: string; svg: string } | null {
+  const slice = boardSlice(doc, boardSize, col, row);
+  if (!slice) return null;
+  const svg = buildSVG(slice.sub, {
+    ...opts,
+    boardSize: 0,
+    fitWindow: false,
+    title: `板 ${slice.label} · 第 ${slice.index}/${slice.total} 块 · 第 ${slice.y0 + 1}-${slice.y0 + slice.h} 行 / 第 ${slice.x0 + 1}-${slice.x0 + slice.w} 列`,
+  });
+  return { name: `板${slice.label}_${slice.index}of${slice.total}.svg`, svg };
+}
+
+/**
+ * 一板一张打包成一个 .zip。
+ *
+ * 之前一板一张是「一块板触发一次下载」，9 块板就是 9 个文件同时涌进下载目录，
+ * 浏览器还会拦「多文件下载」。改成一个压缩包，用户拿到的是一个文件，
+ * 解压就是整整齐齐一堆按板号命名的图。
+ */
+export async function exportBoardZip(
+  doc: PatternDoc,
+  opts: RenderOptions,
+  format: 'png' | 'svg',
+): Promise<{ files: number; bytes: number }> {
+  const bs = Math.max(4, opts.boardSize || doc.pegboard || 29);
+  const lay = boardLayout(doc, bs, 0);
+  const entries: { name: string; data: Uint8Array }[] = [];
+
+  if (format === 'svg') {
+    for (let ry = 0; ry < lay.rows; ry++) {
+      for (let rx = 0; rx < lay.cols; rx++) {
+        const item = boardSvg(doc, opts, bs, rx, ry);
+        if (item) entries.push({ name: item.name, data: textToBytes(item.svg) });
+      }
+    }
+  } else {
+    let index = 0;
+    const total = lay.cols * lay.rows;
+    for (let ry = 0; ry < lay.rows; ry++) {
+      for (let rx = 0; rx < lay.cols; rx++) {
+        index++;
+        const slice = boardSlice(doc, bs, rx, ry);
+        if (!slice) continue;
+        const cellSize = safeCellSize(slice.w, slice.h, opts.cellSize);
+        const canvas = renderPatternCanvas(slice.sub, {
+          ...opts,
+          cellSize,
+          boardSize: 0,
+          title: `板 ${slice.label} · 第 ${index}/${total} 块 · 第 ${slice.y0 + 1}-${slice.y0 + slice.h} 行 / 第 ${slice.x0 + 1}-${slice.x0 + slice.w} 列`,
+        });
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob((b) => resolve(b), 'image/png'),
+        );
+        if (!blob) continue;
+        entries.push({ name: `板${slice.label}_${index}of${total}.png`, data: await blobToBytes(blob) });
+      }
+    }
+  }
+
+  // 附一份用量清单，解压的人不用再回来找
+  if (entries.length) {
+    entries.push({ name: '用量清单.csv', data: textToBytes('\ufeff' + csvText(doc)) });
+  }
+
+  const zip = buildZip(entries);
+  downloadBlob(zip, `${safeFileName(doc.name)}_一板一张_${entries.length - 1}块.zip`);
+  return { files: entries.length - 1, bytes: zip.size };
+}
+
+
 export interface PdfPreviewOptions extends PdfOptions {
   /** 第几页（从 0 开始），默认第 1 页 */
   page?: number;
@@ -1371,8 +1548,8 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   let gridXmm: number;
   let gridYmm: number;
   let cellMm: number;
-  // 预览里用量表与水印由页面层单独画（和 exportPDF 一样），图案绘制本身不画它们
-  const patOnly = { ...opts, legend: false, watermark: false };
+  // 预览里用量表、水印、二维码都由页面层单独画（和 exportPDF 一样），图案绘制本身不画它们
+  const patOnly = { ...opts, legend: false, watermark: false, qr: false };
   let legendSpanMm = 0;
 
   if (opts.layout === 'single') {
@@ -1493,7 +1670,7 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
   ctx.fillStyle = '#9696a5';
   ctx.textAlign = 'right';
   ctx.font = `400 ${Math.round(M(2.3))}px ui-monospace, monospace`;
-  ctx.fillText('Perler Studio', M(pw - margin), footY + M(0.6));
+  ctx.fillText('Perler Studio', M(pw - margin - (opts.qr ? 20 : 0)), footY + M(0.6));
 
   // 水印：预览里同样画出来，导出与预览保持一致。
   // 整行用同一种淡灰、不再用蓝色、不再加下划线，避免抢了图纸本身的视线。
@@ -1510,6 +1687,23 @@ export function renderPdfPreviewCanvas(doc: PatternDoc, opts: PdfPreviewOptions)
     ctx.font = `400 ${Math.round(M(2.3) * 1.3)}px ui-monospace, monospace`;
     ctx.fillText('  ' + short, M(margin) + tw, wmY);
     ctx.textAlign = 'left';
+  }
+
+  // 二维码：右下角，和导出件保持同一位置，预览里就能看见
+  const qrText = opts.qrText || opts.watermarkUrl || DEFAULT_WATERMARK_URL;
+  const qrSizePx = 15;
+  if (opts.qr) {
+    const qr = renderQrCanvas(qrText, { moduleSize: 3, margin: 2 });
+    if (qr) {
+      const qx = M(pw - margin - qrSizePx);
+      const qy = M(ph - margin + 1 - qrSizePx + 3);
+      ctx.drawImage(qr, qx, qy, M(qrSizePx), M(qrSizePx));
+      ctx.textAlign = 'right';
+      ctx.fillStyle = '#9696a5';
+      ctx.font = `400 ${Math.round(M(2.1) * 1.3)}px "PingFang SC","Microsoft YaHei",system-ui,sans-serif`;
+      ctx.fillText('扫码看图纸', M(pw - margin), qy + M(qrSizePx) + M(2.4));
+      ctx.textAlign = 'left';
+    }
   }
 
   return canvas;
@@ -1646,7 +1840,8 @@ function hexRgb(hex: string) {
   };
 }
 
-export function exportCSV(doc: PatternDoc) {
+/** 用量清单的 CSV 文本（导出 CSV 和打包进 zip 都用这一份，避免两套口径） */
+export function csvText(doc: PatternDoc): string {
   const usage = usageOf(doc);
   const defaultPrice = getDefaultPrice();
   const rows: string[] = ['品牌,色号,色名,HEX,数量,已拼,剩余,单价(元/千颗),金额(元),库存(颗),需补货(颗)'];
@@ -1672,8 +1867,12 @@ export function exportCSV(doc: PatternDoc) {
   }
   const total = Array.from(usage.values()).reduce((a, b) => a + b, 0);
   rows.push(['合计', '', '', '', total, '', '', '', totalAmount.toFixed(2), '', totalRestock].join(','));
+  return rows.join('\n');
+}
+
+export function exportCSV(doc: PatternDoc) {
   // 加 BOM 便于 Excel 识别中文
-  downloadText('\ufeff' + rows.join('\n'), `${safeFileName(doc.name)}-用量.csv`, 'text/csv');
+  downloadText('\ufeff' + csvText(doc), `${safeFileName(doc.name)}-用量.csv`, 'text/csv');
 }
 
 export function buildProject(doc: PatternDoc): ProjectFile {

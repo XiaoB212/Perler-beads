@@ -228,7 +228,11 @@ const checkColor = useEditor((s) => s.checkColor);
 
     // 按颜色归批：同色格子合成一条 path，一次 fill，避免每格都切 fillStyle。
     // 豆子孔与对勾也各自合成一条 path，只画一次。
-    const dimMode = flags.progressMode && flags.dimUnplaced;
+    // 进度模式与线上拼豆模式都会在画布上打勾、标错，两者的视觉共用这一套判断。
+    const progressOn = flags.progressMode || flags.onlineMode;
+    // 只有进度模式才把未拼的格子压暗：线上模式要看清每格该放什么颜色
+    // 进度模式和线上模式都要把没拼的格子压暗（虚化），一眼看出还剩哪些
+    const dimMode = progressOn && flags.dimUnplaced;
     // 单色模式：只对某一个色号动手，其余颜色压暗
     const solo = soloColor;
     const byColor = new Map<string, Path2D>();
@@ -238,8 +242,10 @@ const checkColor = useEditor((s) => s.checkColor);
     // 对色拼装：点错的格子按用户选的提醒方式标记
     const wrongs = new Path2D();
     const wrongRings = new Path2D();
-    const wrongStyle = flags.progressMode ? flags.wrongStyle : 'none';
-    const checkActive = flags.progressMode && flags.progressCheck && checkColor >= 0;
+    // 错号只在「线上拼豆模式 + 对色拼装」同时开着时出现：
+    // 进度模式只是「拼了没」，关掉对色拼装后也不再判对错，画面上不该留红框。
+    const wrongStyle = flags.onlineMode && flags.progressCheck ? flags.wrongStyle : 'none';
+    const checkActive = flags.onlineMode && flags.progressCheck && checkColor >= 0;
     // 当前正在拼的色号，用它给同色格子加一圈提示，线上照着拼时一眼看清该放哪
     const targetV = checkActive ? checkColor + 1 : solo !== null ? solo + 1 : 0;
     const targets = new Path2D();
@@ -292,12 +298,14 @@ const checkColor = useEditor((s) => s.checkColor);
         }
         // 褪色（未拼）的格子也要给色号，否则用户看不出这里该放什么豆
         if (drawCodes) codeCells.push({ x: px, y: py, code: c.code, hex: c.hex, dim });
+        // 对勾只在进度模式画：线上模式靠「拼过的亮、没拼的虚」区分就够了，
+        // 满屏对勾反而盖住色号
         if (placed && flags.progressMode) {
           checks.moveTo(px + cell * 0.22, py + cell * 0.52);
           checks.lineTo(px + cell * 0.42, py + cell * 0.74);
           checks.lineTo(px + cell * 0.8, py + cell * 0.26);
         }
-        if (flags.progressMode && wrongMarks.has(y * doc.width + x)) {
+        if (wrongStyle !== 'none' && wrongMarks.has(y * doc.width + x)) {
           if (wrongStyle === 'cross') {
             wrongs.moveTo(px + cell * 0.24, py + cell * 0.24);
             wrongs.lineTo(px + cell * 0.76, py + cell * 0.76);
@@ -349,7 +357,9 @@ const checkColor = useEditor((s) => s.checkColor);
       ctx.fillStyle = hex;
       ctx.fill(p);
     }
-    ctx.globalAlpha = 0.32;
+    // 未拼的格子稍微淡一点，但不能淡到看不清是哪个颜色 ——
+    // 0.32 会把浅色豆子洗成白格，看着像「这一格没上色」，所以抬到 0.55。
+    ctx.globalAlpha = 0.55;
     for (const [hex, p] of byColorDim) {
       ctx.fillStyle = hex;
       ctx.fill(p);
@@ -382,7 +392,7 @@ const checkColor = useEditor((s) => s.checkColor);
       }
       ctx.globalAlpha = 1;
     }
-    if (flags.progressMode) {
+    if (progressOn) {
       // 正在拼的色号先高亮，再画已完成的对号
       if (targetV && cell >= 5) {
         ctx.fillStyle = C.accent;
@@ -741,13 +751,13 @@ const checkColor = useEditor((s) => s.checkColor);
   // ===== 交互 =====
   const startPaint = (x: number, y: number, shift: boolean) => {
     const s = useEditor.getState();
+    // 线上拼豆模式：点格子走对色判定（是否真判定由 clickProgress 里再看「对色拼装」开关）
+    if (s.flags.onlineMode) {
+      s.clickProgress(x, y);
+      return;
+    }
     if (s.flags.progressMode) {
-      // 开了对色拼装就必须走 clickProgress 做色号判定，
-      // 否则直接 paintProgressCell 会把错的格子也老老实实打上勾。
-      if (s.flags.progressCheck && s.checkColor >= 0) {
-        s.clickProgress(x, y);
-        return;
-      }
+      // 进度模式只是打个勾：不管手上拿的是什么颜色，点一下就勾上，绝不报错
       const i = y * doc.width + x;
       const target = doc.cells[i] && doc.progress[i] ? 0 : 1;
       s.progressTarget = target;
@@ -830,7 +840,8 @@ const checkColor = useEditor((s) => s.checkColor);
 
     startPaint(x, y, e.shiftKey);
     dragRef.current = {
-      mode: s.flags.progressMode ? 'progress' : tool === 'eraser' ? 'erase' : 'paint',
+      mode:
+        s.flags.onlineMode || s.flags.progressMode ? 'progress' : tool === 'eraser' ? 'erase' : 'paint',
       lastX: x,
       lastY: y,
       startX: x,
@@ -890,8 +901,8 @@ const checkColor = useEditor((s) => s.checkColor);
     if (!inBounds(x, y)) return;
     if (drag.mode === 'progress') {
       const s = useEditor.getState();
-      // 对色拼装时拖着划过的格子也要按色号判定，不能一律打勾
-      if (s.flags.progressCheck && s.checkColor >= 0) s.clickProgress(x, y);
+      // 线上拼豆模式拖着划过的格子也要按色号判定；进度模式只是打勾，不判色号
+      if (s.flags.onlineMode) s.clickProgress(x, y);
       else s.paintProgressCell(x, y, s.progressTarget);
     } else if (drag.mode === 'erase') {
       const s = useEditor.getState();

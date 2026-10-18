@@ -199,7 +199,7 @@ export default function UsagePanel() {
           <div className="online-banner">
             <b>线上拼豆模式</b>
             <span>
-              照着图纸一颗颗拼：对色判对错、单色高亮、每格颜色进度都在下面这个面板里，还能把进度做成链接发出去。
+              对色判定：手上拿的豆子和这一格要求的色号对不对。点对了打勾、点错了标出来，每格颜色进度都在下面这个面板里，还能把进度做成链接或二维码发出去。
             </span>
           </div>
           <ProgressPanel />
@@ -208,8 +208,8 @@ export default function UsagePanel() {
 
       {mode === 'usage' && !flags.onlineMode && (
         <div className="hint-box" style={{ marginBottom: 12 }}>
-          上面那个「线上拼豆模式」是照着图纸拼的一整套：开起来才有对色判对错、单色高亮、进度环和进度链接。
-          只想要「点一下打个勾」，用左上角的「进度」按钮就够了。
+          「线上拼豆模式」管的是对色：手上这几颗豆跟格子要求的色号对不对，点错了会标出来。
+          只想知道「哪些拼好了、还剩多少、要补多少货」，用左上角的「进度」按钮就够了。
         </div>
       )}
 

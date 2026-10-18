@@ -195,9 +195,12 @@ export function quantizeImage(
     alpha[i] = a;
   }
 
-  // 背景判定：只把「和画布边缘连通的白色」当背景。
-  // 旧写法把所有够白的像素都判成空格，结果人物脸上的高光、白衣服、
-  // 眼睛反光全被挖成洞——这就是用户说的「中间还是会有不显示色号的部分」。
+  // 背景判定：只把「和画布边缘连通、而且是一整块够大的白色」当背景。
+  // 1) 旧写法把所有够白的像素都判成空格 → 人物脸上的高光、白衣服、眼睛反光
+  //    全被挖成洞，这就是「中间还是会有不显示色号的部分」。
+  // 2) 只做连通扩散还不够：缩图时白背景会顺着细缝渗进图案内部，形成一条条白脉，
+  //    把整块图案蛀空。所以先给候选白做连通块标记，只有「碰到画布边缘、且面积
+  //    不小于总面积 0.05%」的块才算背景，细白脉会被当成普通像素去配色。
   const isBg = new Uint8Array(total);
   if (opts.transparentWhite) {
     const thr = opts.whiteThreshold;
@@ -208,31 +211,31 @@ export function quantizeImage(
       const b = rgb[i * 3 + 2];
       if (r >= thr && g >= thr && b >= thr) cand[i] = 1;
     }
-    // 从四条边向内做连通扩散，只有连到边上的白才算背景
+    const minArea = Math.max(6, Math.floor(total * 0.0005));
+    const seen = new Uint8Array(total);
     const stack: number[] = [];
-    const push = (x: number, y: number) => {
-      const i = y * width + x;
-      if (cand[i] && !isBg[i]) {
-        isBg[i] = 1;
-        stack.push(i);
+    const region: number[] = [];
+    for (let s = 0; s < total; s++) {
+      if (!cand[s] || seen[s]) continue;
+      region.length = 0;
+      stack.length = 0;
+      stack.push(s);
+      seen[s] = 1;
+      let touchesEdge = false;
+      while (stack.length) {
+        const i = stack.pop()!;
+        region.push(i);
+        const x = i % width;
+        const y = (i / width) | 0;
+        if (x === 0 || y === 0 || x === width - 1 || y === height - 1) touchesEdge = true;
+        if (x > 0 && cand[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack.push(i - 1); }
+        if (x < width - 1 && cand[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack.push(i + 1); }
+        if (y > 0 && cand[i - width] && !seen[i - width]) { seen[i - width] = 1; stack.push(i - width); }
+        if (y < height - 1 && cand[i + width] && !seen[i + width]) { seen[i + width] = 1; stack.push(i + width); }
       }
-    };
-    for (let x = 0; x < width; x++) {
-      push(x, 0);
-      push(x, height - 1);
-    }
-    for (let y = 0; y < height; y++) {
-      push(0, y);
-      push(width - 1, y);
-    }
-    while (stack.length) {
-      const i = stack.pop()!;
-      const x = i % width;
-      const y = (i / width) | 0;
-      if (x > 0) push(x - 1, y);
-      if (x < width - 1) push(x + 1, y);
-      if (y > 0) push(x, y - 1);
-      if (y < height - 1) push(x, y + 1);
+      if (touchesEdge && region.length >= minArea) {
+        for (const i of region) isBg[i] = 1;
+      }
     }
   }
 

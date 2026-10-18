@@ -305,23 +305,36 @@ export const useEditor = create<EditorState>((set, get) => ({
       get().setOnlineMode(!cur.onlineMode);
       return;
     }
-    const next = !cur[k];
-    // 线上拼豆模式自带进度模式：进度模式一关，线上模式也就没意义了
-    if (k === 'progressMode' && !next) {
-      set({ flags: { ...cur, progressMode: false, onlineMode: false } });
+    if (k === 'progressMode') {
+      // 两个模式互斥：开了进度就把线上收起来，反之亦然
+      set({ flags: { ...cur, progressMode: !cur.progressMode, onlineMode: false } });
       return;
     }
-    set({ flags: { ...cur, [k]: next } });
+    set({ flags: { ...cur, [k]: !cur[k] } });
   },
   setOnlineMode: (on) => {
     const cur = get().flags;
+    // 线上拼豆模式：拿在手里的豆子和格子色号对不对。它和进度模式互斥——
+    // 两个都开的话「点一下到底判不判色号」就说不清了，所以开一个就关另一个。
     set({
       flags: on
-        ? { ...cur, onlineMode: true, progressMode: true, progressCheck: true }
-        : { ...cur, onlineMode: false, progressMode: false, progressCheck: false },
+        ? { ...cur, onlineMode: true, progressMode: false, progressCheck: true }
+        : { ...cur, onlineMode: false, progressCheck: false },
     });
   },
-  setFlag: (k, v) => set({ flags: { ...get().flags, [k]: v } }),
+  setFlag: (k, v) => {
+    const cur = get().flags;
+    // 这两个开关不能同时亮着，setFlag 走的是设置面板的开关列表，也要挡一下
+    if (k === 'progressMode' && v === true) {
+      set({ flags: { ...cur, progressMode: true, onlineMode: false } });
+      return;
+    }
+    if (k === 'onlineMode' && v === true) {
+      set({ flags: { ...cur, onlineMode: true, progressMode: false, progressCheck: true } });
+      return;
+    }
+    set({ flags: { ...cur, [k]: v } });
+  },
   setZoom: (z) => set({ zoom: Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, z)) }),
   setPan: (p) => set({ pan: p }),
   /** 增量平移：滚轮连续触发时必须基于最新状态累加，否则用闭包里的旧 pan 会丢步、回跳 */
@@ -469,9 +482,9 @@ export const useEditor = create<EditorState>((set, get) => ({
     // 单色模式：点到别的颜色直接不理，避免手滑把别的色号也勾上
     if (soloColor !== null && doc.cells[i] - 1 !== soloColor) return;
 
-    // 对色拼装：判定用的是「手上的画笔颜色」——这才是用户手里真正拿的那颗豆。
-    // 只有选「任意」时才退回成随手打勾。
-    if (flags.progressCheck && checkColor >= 0) {
+    // 只有「线上拼豆模式 + 对色拼装」同时开着才判对错；
+    // 关掉对色拼装、或者只是进度模式时，点一下就是打个勾，绝不报错。
+    if (flags.onlineMode && flags.progressCheck) {
       const want = colorIndex + 1;
       const hit = doc.cells[i] === want;
       const progress = new Uint8Array(doc.progress);

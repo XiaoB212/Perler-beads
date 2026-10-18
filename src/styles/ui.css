@@ -510,3 +510,17 @@ input[type='range']::-moz-range-thumb {
   flex: none;
   margin-top: 1px;
 }
+/* 二维码：两个快捷来源按钮并排 */
+.qr-pick {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.qr-pick .btn {
+  flex: none;
+}
+.qr-pick .btn[disabled] {
+  opacity: 0.55;
+  cursor: default;
+}

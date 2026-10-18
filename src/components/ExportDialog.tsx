@@ -7,19 +7,20 @@ import {
   DEFAULT_WATERMARK_TEXT,
   DEFAULT_WATERMARK_URL,
   cellAdvice,
-  exportBoardImagesPNG,
-  exportBoardImagesSVG,
+  exportBoardZip,
   exportCSV,
   exportPDF,
   exportPNG,
   exportProject,
   exportSVG,
+  renderBoardCanvas,
   renderPatternCanvas,
   renderPdfPreviewCanvas,
   type PdfOptions,
   type RenderOptions,
 } from '../core/export';
-import { PEGBOARD_MAX, clampPegboard } from '../core/board';
+import { PEGBOARD_MAX, boardLabel, clampPegboard } from '../core/board';
+import { buildShareUrl } from '../core/share';
 import { IconCheck, IconClose, IconDownload, IconFile, IconImage, IconSparkle } from './Icons';
 
 interface Props {
@@ -72,8 +73,15 @@ export default function ExportDialog({ onClose }: Props) {
   const [watermarkText, setWatermarkText] = useState(DEFAULT_WATERMARK_TEXT);
   const [watermarkUrl, setWatermarkUrl] = useState(DEFAULT_WATERMARK_URL);
   const [fitWindow, setFitWindow] = useState(true);
-  /** PNG / SVG：一板一张，每块板单独一个文件（6.9 万格那种大图色号才看得清） */
+  /** 导出件右下角印一枚二维码：链接太长没法抄，扫码最实际 */
+  const [qr, setQr] = useState(true);
+  const [qrText, setQrText] = useState(DEFAULT_WATERMARK_URL);
+  const [qrBusy, setQrBusy] = useState(false);
+  /** PNG / SVG：一板一张，每块板单独一张图，导出时打成一个 zip */
   const [perBoard, setPerBoard] = useState(false);
+  /** 预览是不是只看某一块板（大图整张缩在一格里根本看不清色号） */
+  const [previewBoard, setPreviewBoard] = useState(false);
+  const [boardPage, setBoardPage] = useState(0);
 
   const previewRef = useRef<HTMLDivElement>(null);
 
@@ -96,6 +104,8 @@ export default function ExportDialog({ onClose }: Props) {
       watermarkUrl,
       fitWindow,
       shape,
+      qr,
+      qrText,
     }),
     [
       cellSize,
@@ -113,6 +123,8 @@ export default function ExportDialog({ onClose }: Props) {
       watermarkUrl,
       fitWindow,
       shape,
+      qr,
+      qrText,
     ],
   );
 
@@ -163,6 +175,16 @@ export default function ExportDialog({ onClose }: Props) {
     if (pdfPage > pdfPages - 1) setPdfPage(0);
   }, [pdfPages, pdfPage]);
 
+  // 分板预览的翻页越界保护
+  useEffect(() => {
+    if (boardPage > boardTotal - 1) setBoardPage(0);
+  }, [boardTotal, boardPage]);
+
+  // 切到「只看某一块板」时，直接从当前 PDF 页 / 第一块开始
+  useEffect(() => {
+    if (previewBoard && boardSize <= 0) setPreviewBoard(false);
+  }, [previewBoard, boardSize]);
+
   // 实时预览
   useEffect(() => {
     const host = previewRef.current;
@@ -173,6 +195,14 @@ export default function ExportDialog({ onClose }: Props) {
     let canvas: HTMLCanvasElement;
     if (fmt === 'pdf') {
       canvas = renderPdfPreviewCanvas(doc, { ...pdfOpts, page: pdfPage });
+    } else if (previewBoard && boardSize > 0 && boardTotal > 1) {
+      // 只看一块板：格子能放到最大，色号肉眼可辨
+      const bc = boardPage % boardCols;
+      const br = Math.floor(boardPage / boardCols);
+      const one = renderBoardCanvas(doc, renderOpts, bc, br, 460);
+      if (!one) return;
+      canvas = one;
+      canvas.style.imageRendering = 'pixelated';
     } else {
       const gap = 1.2;
       const spanW = boardSize > 0 ? doc.width + Math.floor((doc.width - 1) / boardSize) * gap : doc.width;
@@ -195,22 +225,27 @@ export default function ExportDialog({ onClose }: Props) {
       canvas.style.background = '#fff';
     }
     host.appendChild(canvas);
-  }, [doc, renderOpts, pdfOpts, fmt, boardSize, pdfPage]);
+  }, [doc, renderOpts, pdfOpts, fmt, boardSize, pdfPage, previewBoard, boardPage, boardCols]);
 
   const doExport = () => {
     try {
       if (fmt === 'png') {
         if (perBoard && boardSize > 0 && boardTotal > 1) {
-          void exportBoardImagesPNG(doc, renderOpts);
-          notify(`已开始下载 ${boardTotal} 个 PNG（每块板一张，文件名带板号）`);
+          // 一板一张：打成一个 zip，避免 9 个文件同时涌进下载目录被浏览器拦
+          void exportBoardZip(doc, renderOpts, 'png').then(
+            (res) => notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`),
+            () => notify('打包失败，请改成整张一张试试', 'warn'),
+          );
         } else {
           exportPNG(doc, renderOpts);
           notify('已开始下载');
         }
       } else if (fmt === 'svg') {
         if (perBoard && boardSize > 0 && boardTotal > 1) {
-          exportBoardImagesSVG(doc, renderOpts);
-          notify(`已开始下载 ${boardTotal} 个 SVG（每块板一张，文件名带板号）`);
+          void exportBoardZip(doc, renderOpts, 'svg').then(
+            (res) => notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`),
+            () => notify('打包失败，请改成整张一张试试', 'warn'),
+          );
         } else {
           exportSVG(doc, renderOpts);
           notify('已开始下载');
@@ -267,7 +302,13 @@ export default function ExportDialog({ onClose }: Props) {
 
           <div className="import-grid" style={{ gridTemplateColumns: 'minmax(0, 1.15fr) minmax(0, 1fr)' }}>
             <div className="preview-box" style={{ minHeight: 260, padding: 12 }}>
-              <span className="preview-label">{fmt === 'pdf' ? '纸张预览' : '预览'}</span>
+              <span className="preview-label">
+                {fmt === 'pdf'
+                  ? '纸张预览'
+                  : fmt !== 'csv' && fmt !== 'project' && previewBoard && boardSize > 0 && boardTotal > 1
+                    ? `预览 · 板 ${boardLabel(boardPage % boardCols, Math.floor(boardPage / boardCols))}`
+                    : '预览'}
+              </span>
               {fmt === 'csv' || fmt === 'project' ? (
                 <div style={{ textAlign: 'center', color: 'var(--ink-3)', fontSize: 12, lineHeight: 1.8 }}>
                   {fmt === 'csv' && (
@@ -317,6 +358,46 @@ export default function ExportDialog({ onClose }: Props) {
                         下一页
                       </button>
                     </div>
+                  )}
+                  {fmt !== 'pdf' && boardSize > 0 && boardTotal > 1 && (
+                    <>
+                      <label className="checkbox-line" style={{ marginTop: 8 }}>
+                        <span
+                          className={'checkbox' + (previewBoard ? ' on' : '')}
+                          onClick={() => setPreviewBoard(!previewBoard)}
+                          role="checkbox"
+                          aria-checked={previewBoard}
+                          tabIndex={0}
+                        >
+                          {previewBoard && <IconCheck width={11} height={11} />}
+                        </span>
+                        <span onClick={() => setPreviewBoard(!previewBoard)}>
+                          逐块预览：一次只看一块板，格子放到最大
+                        </span>
+                      </label>
+                      {previewBoard && (
+                        <div className="pdf-pager">
+                          <button
+                            className="btn ghost sm"
+                            disabled={boardPage === 0}
+                            onClick={() => setBoardPage((p) => Math.max(0, p - 1))}
+                          >
+                            上一块
+                          </button>
+                          <span>
+                            第 {boardPage + 1} / {boardTotal} 块
+                            {boardSize > 0 ? ` · ${boardLabel(boardPage % boardCols, Math.floor(boardPage / boardCols))}` : ''}
+                          </span>
+                          <button
+                            className="btn ghost sm"
+                            disabled={boardPage >= boardTotal - 1}
+                            onClick={() => setBoardPage((p) => Math.min(boardTotal - 1, p + 1))}
+                          >
+                            下一块
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                   {fmt === 'pdf' && (
                     <div className="pdf-cap">
@@ -482,6 +563,22 @@ export default function ExportDialog({ onClose }: Props) {
                       </button>
                     </div>
                   </div>
+                  {(fmt === 'png' || fmt === 'svg') && boardSize > 0 && boardTotal > 1 && (
+                    <label className="checkbox-line">
+                      <span
+                        className={'checkbox' + (perBoard ? ' on' : '')}
+                        onClick={() => setPerBoard(!perBoard)}
+                        role="checkbox"
+                        aria-checked={perBoard}
+                        tabIndex={0}
+                      >
+                        {perBoard && <IconCheck width={11} height={11} />}
+                      </span>
+                      <span onClick={() => setPerBoard(!perBoard)}>
+                        一板一张打包：每块板单独一张图，打成一个 zip 一次下载（{boardTotal} 张图 + 1 份用量清单）
+                      </span>
+                    </label>
+                  )}
                 </>
               )}
 
@@ -528,6 +625,58 @@ export default function ExportDialog({ onClose }: Props) {
                       <span className="hint">留空则不写地址；想署名自己就改上面的文字</span>
                     </div>
                   )}
+                  <div className="check-row" onClick={() => setQr((v) => !v)}>
+                    <span className={'checkbox' + (qr ? ' on' : '')}>
+                      <IconCheck width={11} height={11} />
+                    </span>
+                    右下角印二维码（扫码打开）
+                  </div>
+                  {qr && (
+                    <div className="field">
+                      <label>二维码内容</label>
+                      <input
+                        className="input"
+                        value={qrText}
+                        placeholder="https://"
+                        onChange={(e) => setQrText(e.target.value)}
+                      />
+                      <div className="qr-pick">
+                        <button
+                          className="btn sm"
+                          onClick={() => setQrText(DEFAULT_WATERMARK_URL)}
+                          title="二维码指向项目首页"
+                        >
+                          项目地址
+                        </button>
+                        <button
+                          className="btn sm"
+                          disabled={qrBusy}
+                          onClick={async () => {
+                            setQrBusy(true);
+                            try {
+                              const res = await buildShareUrl(doc);
+                              setQrText(res.url);
+                              setQr(true);
+                              notify(
+                                res.tooLong
+                                  ? `进度链接 ${res.length} 字符，二维码里塞不下，换个更小的图试试`
+                                  : `二维码已换成这张图纸的进度链接（${res.length} 字符）`,
+                                res.tooLong ? 'warn' : 'ok',
+                              );
+                            } finally {
+                              setQrBusy(false);
+                            }
+                          }}
+                          title="把这张图纸和当前进度做成链接，二维码扫出来就能看到"
+                        >
+                          {qrBusy ? '生成中…' : '这张图纸的进度'}
+                        </button>
+                      </div>
+                      <span className="hint">
+                        链接太长时复制粘贴很容易断，二维码扫一下就进去了。打印机票大小的纸也能扫。
+                      </span>
+                    </div>
+                  )}
                 </>
               )}
 
@@ -551,30 +700,19 @@ export default function ExportDialog({ onClose }: Props) {
                               单格调到 16px
                             </button>
                           )}
-                          {boardSize > 0 && boardTotal > 1 && (
+                          {boardSize > 0 && boardTotal > 1 && !perBoard && (
                             <button className="btn sm primary" onClick={() => setPerBoard(true)}>
-                              一板一张（{boardTotal} 个文件）
+                              一板一张打包（{boardTotal} 块板，一个 zip）
                             </button>
                           )}
                         </>
                       )}
                     </div>
                   )}
-                  {(fmt === 'png' || fmt === 'svg') && (
-                    <label className="checkbox-line">
-                      <span
-                        className={'checkbox' + (perBoard ? ' on' : '')}
-                        onClick={() => setPerBoard(!perBoard)}
-                        role="checkbox"
-                        aria-checked={perBoard}
-                        tabIndex={0}
-                      >
-                        {perBoard && <IconCheck width={11} height={11} />}
-                      </span>
-                      <span onClick={() => setPerBoard(!perBoard)}>
-                        一板一张：每块板单独一个文件，文件名和图上都标好板号（当前 {boardTotal} 块板）
-                      </span>
-                    </label>
+                  {(fmt === 'png' || fmt === 'svg') && boardSize > 0 && boardTotal > 1 && (
+                    <span className="hint" style={{ display: 'block' }}>
+                      预览框下面可以勾「逐块预览」，一次只看一块板。
+                    </span>
                   )}
                 </div>
               )}

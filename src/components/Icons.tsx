@@ -325,3 +325,13 @@ export const IconKeyboard = (p: P) => (
     <path d="M6.4 10h.01M9.6 10h.01M12.8 10h.01M16 10h.01M6.4 13.2h.01M16 13.2h.01M9.2 13.2h5.6" />
   </svg>
 );
+
+export const IconQr = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.2" y="3.2" width="7" height="7" rx="1.2" />
+    <rect x="13.8" y="3.2" width="7" height="7" rx="1.2" />
+    <rect x="3.2" y="13.8" width="7" height="7" rx="1.2" />
+    <path d="M6.6 6.6h.01M17.2 6.6h.01M6.6 17.2h.01" />
+    <path d="M14.2 14.2h2.2v2.2h-2.2zM18.4 18.4h2.2v2.2h-2.2zM14.2 19.4h1.4M19.6 14.2h1v1.6" />
+  </svg>
+);

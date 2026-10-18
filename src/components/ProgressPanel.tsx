@@ -1,6 +1,9 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useEditor } from '../core/store';
 import { buildShareUrl } from '../core/share';
+import { renderQrCanvas } from '../core/qr';
+import { downloadBlob, safeFileName } from '../core/util';
+import { IconQr } from './Icons';
 
 /** 色号 → 总格数 / 已拼格数 */
 function colorStats(cells: Uint16Array, progress: Uint8Array, paletteLength: number) {
@@ -39,6 +42,7 @@ export default function ProgressPanel() {
   const zoomToCell = useEditor((s) => s.zoomToCell);
   const [autoNext, setAutoNext] = useState(true);
   const [shareMsg, setShareMsg] = useState('');
+  const [shareUrl, setShareUrl] = useState('');
 
   const { total, placed } = useMemo(
     () => colorStats(doc.cells, doc.progress, doc.palette.length),
@@ -86,8 +90,9 @@ export default function ProgressPanel() {
 
   const share = async () => {
     const res = await buildShareUrl(doc);
+    setShareUrl(res.url);
     const hint = res.tooLong
-      ? `这张图太大，链接 ${res.length} 字符，微信/Discord 之类多半会截断。建议改用导出的 PNG / PDF 分享，或者只分享小图。`
+      ? `这张图太大，链接 ${res.length} 字符，微信/Discord 之类多半会截断。扫码比复制链接稳，用下面的二维码试试。`
       : `进度链接已复制（${res.length} 字符）${res.saved && res.saved > 0 ? `，比不压缩短 ${res.saved} 字符` : ''}，发给别人就能看到你拼到哪儿了`;
     const done = () => {
       setShareMsg(hint);
@@ -102,6 +107,29 @@ export default function ProgressPanel() {
     }
     if (!navigator.clipboard) setShareMsg(res.url);
   };
+
+  // 二维码：链接动辄几百上千字符，复制粘贴容易断，扫一下最稳
+  const qrCanvas = useMemo(() => (shareUrl ? renderQrCanvas(shareUrl, { moduleSize: 4 }) : null), [shareUrl]);
+
+  const saveQr = () => {
+    const canvas = renderQrCanvas(shareUrl || '', { moduleSize: 10 });
+    if (!canvas) {
+      notify('这张图太大，二维码塞不下，换小一点的图或者用链接分享', 'warn');
+      return;
+    }
+    canvas.toBlob((blob) => {
+      if (blob) downloadBlob(blob, `进度二维码_${safeFileName(doc.name)}.png`);
+    }, 'image/png');
+  };
+
+  const qrCanvasRef = useCallback((el: HTMLCanvasElement | null) => {
+    if (!el || !qrCanvas) return;
+    el.width = qrCanvas.width;
+    el.height = qrCanvas.height;
+    const ctx = el.getContext('2d');
+    if (ctx) ctx.drawImage(qrCanvas, 0, 0);
+  }, [qrCanvas]);
+
 
   return (
     <>
@@ -269,12 +297,29 @@ export default function ProgressPanel() {
 
       <div className="field" style={{ marginTop: 12 }}>
         <label>分享进度</label>
-        <button className="btn block" onClick={share}>
-          复制进度分享链接
-        </button>
+        <div className="share-row">
+          <button className="btn block" onClick={share}>
+            <IconQr width={13} height={13} />
+            {shareUrl ? '重新生成链接' : '生成进度链接'}
+          </button>
+          {shareUrl && (
+            <button className="btn block" onClick={saveQr} title="把二维码存成 PNG，方便发到群里或打印">
+              存二维码
+            </button>
+          )}
+        </div>
         <p className="hint" style={{ marginTop: 6 }}>
           链接里带着图纸和你已经拼好的部分，别人打开就能看到进度，不用登录也不用上传。
         </p>
+        {shareUrl && (
+          <div className="share-qr">
+            <canvas ref={qrCanvasRef} className="share-qr-canvas" aria-label="进度分享二维码" />
+            <div className="share-qr-side">
+              <b>扫码看进度</b>
+              <span>{shareUrl.length} 字符的链接都在这张图里，手机上直接扫，不用复制粘贴。</span>
+            </div>
+          </div>
+        )}
         {shareMsg && <p className="hint share-msg">{shareMsg}</p>}
       </div>
     </>

@@ -134,8 +134,16 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
   /** 原图每个像素大约对应多大一块豆子（越小越精细） */
   const pxPerBead = img ? img.naturalWidth / Math.max(1, width) : 0;
 
+  // 反过来也要同步：用户直接改「单板格数」或「几块板」时，
+  // 上面的参考比例要跟着变，不能还挂着旧数字。
+  useEffect(() => {
+    if (!img || !pxPerBead) return;
+    if (ratioFocusedRef.current) return;
+    setRatioText(String(Math.round(pxPerBead * 10) / 10));
+  }, [img, pxPerBead]);
+
   /** 按「1 颗豆 ≈ N 个原图像素」反推板数；单板格数也跟着自动挑一档 */
-  const applyRatio = (r: number) => {
+  const applyRatio = (r: number, keepText = false) => {
     if (!img || !Number.isFinite(r) || r <= 0) return;
     const targetW = Math.max(1, Math.round(img.naturalWidth / r));
     const targetH = Math.max(1, Math.round(img.naturalHeight / r));
@@ -159,8 +167,11 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
     setRows(rw);
     setColsText(String(c));
     setRowsText(String(rw));
-    setRatioText(String(r));
+    if (!keepText) setRatioText(String(r));
   };
+
+  // 参考比例输入框是否正在编辑：正编辑时不要用「实际比例」把用户敲进去的数字覆盖掉
+  const ratioFocusedRef = useRef(false);
 
   const palette: BeadColor[] = useMemo(() => {
     return useDocPalette ? doc.palette : palettePreset(brandKey);
@@ -516,10 +527,20 @@ export default function ImportDialog({ onClose, initialFile }: Props) {
                       max={16}
                       step={0.5}
                       value={ratioText}
-                      onChange={(e) => setRatioText(e.target.value)}
+                      onFocus={() => {
+                        ratioFocusedRef.current = true;
+                      }}
+                      onChange={(e) => {
+                        const raw = e.target.value;
+                        setRatioText(raw);
+                        // 边打边联动：改比例的同时把上面的单板格数 / 板数一起调好
+                        const v = Number(raw);
+                        if (Number.isFinite(v) && v > 0) applyRatio(v, true);
+                      }}
                       onBlur={() => {
+                        ratioFocusedRef.current = false;
                         const v = Number(ratioText);
-                        if (Number.isFinite(v) && v > 0) applyRatio(v);
+                        if (Number.isFinite(v) && v > 0) applyRatio(v, true);
                         else setRatioText(pxPerBead ? pxPerBead.toFixed(1) : '2');
                       }}
                       style={{ width: 72 }}
