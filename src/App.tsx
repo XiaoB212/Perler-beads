@@ -6,7 +6,7 @@ import ColorPanel from './components/ColorPanel';
 import UsagePanel from './components/UsagePanel';
 import SettingsPanel from './components/SettingsPanel';
 import ColorManager from './components/ColorManager';
-import ImportDialog from './components/ImportDialog';
+import ImportDialog, { type ImportSeed } from './components/ImportDialog';
 import ExportDialog from './components/ExportDialog';
 import NewCanvasDialog from './components/NewCanvasDialog';
 import ProjectsDialog from './components/ProjectsDialog';
@@ -39,6 +39,7 @@ import {
   IconMoon,
   IconUndo,
   IconUpload,
+  IconWand,
 } from './components/Icons';
 import type { Tool } from './core/types';
 import { eventToBinding, keyLabel, loadKeymap, resolveAction, type KeyMap } from './core/keymap';
@@ -124,6 +125,13 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
   const [sheet, setSheet] = useState<null | SideTab>(null);
   const [titleDraft, setTitleDraft] = useState(doc.name);
   const [dropped, setDropped] = useState<File | null>(null);
+  /** 上次生成图纸时用的图片和参数：支持「重调图片」二次编辑 */
+  const [lastSeed, setLastSeed] = useState<ImportSeed | null>(null);
+  const [seedForOpen, setSeedForOpen] = useState<ImportSeed | null>(null);
+  const openImport = useCallback((seed: ImportSeed | null = null) => {
+    setSeedForOpen(seed);
+    setDialog('import');
+  }, []);
   const [dragOver, setDragOver] = useState(false);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
   const [resolved, setResolved] = useState(() => resolveTheme(getThemeMode()));
@@ -330,6 +338,7 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
       }
       if (f.type.startsWith('image/')) {
         setDropped(f);
+        setSeedForOpen(null);
         setDialog('import');
         return;
       }
@@ -397,6 +406,8 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
           return;
         case 'file.import':
           e.preventDefault();
+          setDropped(null);
+          setSeedForOpen(null);
           setDialog('import');
           return;
         case 'file.new':
@@ -609,9 +620,18 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
             <button className="btn sm hide-sm" onClick={() => setDialog('new')} title="新建图纸 (N)">
               <IconPlus width={13} height={13} /> 新建
             </button>
-            <button className="btn sm hide-sm" onClick={() => setDialog('import')} title="图片转图纸 (Ctrl+O)">
+            <button className="btn sm hide-sm" onClick={() => openImport()} title="图片转图纸 (Ctrl+O)">
               <IconImage width={13} height={13} /> 图片转图纸
             </button>
+            {lastSeed && (
+              <button
+                className="btn sm hide-sm"
+                onClick={() => openImport(lastSeed)}
+                title="回到上次的图片，重新选范围 / 重新抠图"
+              >
+                <IconWand width={13} height={13} /> 重调图片
+              </button>
+            )}
             <button className="btn sm hide-sm" onClick={() => setDialog('projects')} title="我的图纸">
               <IconFolder width={13} height={13} /> 图纸
             </button>
@@ -712,7 +732,7 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
                     所有数据只保存在你的浏览器里，不上传任何服务器。
                   </p>
                   <div className="empty-actions">
-                    <button className="btn primary" onClick={() => setDialog('import')}>
+                    <button className="btn primary" onClick={() => openImport()}>
                       <IconImage width={14} height={14} /> 图片转图纸
                     </button>
                     <button className="btn" onClick={() => setDialog('projects')}>
@@ -946,7 +966,7 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
                   <button className="btn block" onClick={() => { setSheet(null); setDialog('new'); }}>
                     <IconPlus width={14} height={14} /> 新建图纸
                   </button>
-                  <button className="btn block" onClick={() => { setSheet(null); setDialog('import'); }}>
+                  <button className="btn block" onClick={() => { setSheet(null); openImport(); }}>
                     <IconImage width={14} height={14} /> 图片转图纸
                   </button>
                   <button className="btn block" onClick={() => { setSheet(null); setDialog('projects'); }}>
@@ -979,9 +999,12 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
       {dialog === 'import' && (
         <ImportDialog
           initialFile={dropped}
+          initialSeed={seedForOpen}
+          onSeed={setLastSeed}
           onClose={() => {
             setDialog(null);
             setDropped(null);
+            setSeedForOpen(null);
           }}
         />
       )}

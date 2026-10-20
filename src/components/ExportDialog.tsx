@@ -55,8 +55,6 @@ export default function ExportDialog({ onClose }: Props) {
   const [pageSize, setPageSize] = useState<'a4' | 'letter'>('a4');
   const [orientation, setOrientation] = useState<'auto' | 'portrait' | 'landscape'>('auto');
   const [layout, setLayout] = useState<'single' | 'boards'>('single');
-  const [withLegend, setWithLegend] = useState(false);
-  const [calibration, setCalibration] = useState(true);
   // 拼豆板尺寸：默认跟图纸自身设置一致（不再写死 64 —— 29×29 的图写 64 根本没意义）
   const [boardSize, setBoardSize] = useState(() => doc.pegboard || 0);
   const [boardText, setBoardText] = useState(() => String(doc.pegboard || 0));
@@ -71,7 +69,6 @@ export default function ExportDialog({ onClose }: Props) {
   const [legend, setLegend] = useState(true);
   const [watermark, setWatermark] = useState(true);
   const [watermarkText, setWatermarkText] = useState(DEFAULT_WATERMARK_TEXT);
-  const [watermarkUrl, setWatermarkUrl] = useState(DEFAULT_WATERMARK_URL);
   const [fitWindow, setFitWindow] = useState(true);
   /** 导出件右下角印一枚二维码：链接太长没法抄，扫码最实际 */
   const [qr, setQr] = useState(true);
@@ -84,6 +81,8 @@ export default function ExportDialog({ onClose }: Props) {
   const [boardPage, setBoardPage] = useState(0);
 
   const previewRef = useRef<HTMLDivElement>(null);
+  /** 导出中：PNG 生成大图要几百毫秒，期间把按钮锁住，避免连点导出两份 */
+  const [busy, setBusy] = useState(false);
 
   const renderOpts: RenderOptions = useMemo(
     () => ({
@@ -101,7 +100,8 @@ export default function ExportDialog({ onClose }: Props) {
       legend,
       watermark,
       watermarkText,
-      watermarkUrl,
+      // 水印区不再单独填地址：二维码内容就是这份图纸要指向的地址
+      watermarkUrl: qrText,
       fitWindow,
       shape,
       qr,
@@ -120,7 +120,6 @@ export default function ExportDialog({ onClose }: Props) {
       legend,
       watermark,
       watermarkText,
-      watermarkUrl,
       fitWindow,
       shape,
       qr,
@@ -135,12 +134,10 @@ export default function ExportDialog({ onClose }: Props) {
       pageSize,
       orientation,
       layout,
-      withLegend,
-      calibration,
       withHeader: true,
       boardSize,
     }),
-    [renderOpts, pageSize, orientation, layout, withLegend, calibration, boardSize],
+    [renderOpts, pageSize, orientation, layout, boardSize],
   );
 
   const boardCols = boardSize > 0 ? Math.ceil(doc.width / boardSize) : 1;
@@ -227,32 +224,34 @@ export default function ExportDialog({ onClose }: Props) {
     host.appendChild(canvas);
   }, [doc, renderOpts, pdfOpts, fmt, boardSize, pdfPage, previewBoard, boardPage, boardCols]);
 
-  const doExport = () => {
+  const doExport = async () => {
+    if (busy) return;
+    setBusy(true);
     try {
       if (fmt === 'png') {
         if (perBoard && boardSize > 0 && boardTotal > 1) {
           // 一板一张：打成一个 zip，避免 9 个文件同时涌进下载目录被浏览器拦
-          void exportBoardZip(doc, renderOpts, 'png').then(
-            (res) => notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`),
-            () => notify('打包失败，请改成整张一张试试', 'warn'),
-          );
+          const res = await exportBoardZip(doc, renderOpts, 'png');
+          notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`);
         } else {
-          exportPNG(doc, renderOpts);
-          notify('已开始下载');
+          const res = await exportPNG(doc, renderOpts);
+          const shrunk =
+            res.cellSize < cellSize - 0.05
+              ? `（单格从 ${cellSize}px 自动降到 ${res.cellSize.toFixed(1)}px，再大浏览器就画不出来了）`
+              : '';
+          notify(`已下载 ${res.width}×${res.height} PNG · ${Math.round(res.bytes / 1024)} KB${shrunk}`);
         }
       } else if (fmt === 'svg') {
         if (perBoard && boardSize > 0 && boardTotal > 1) {
-          void exportBoardZip(doc, renderOpts, 'svg').then(
-            (res) => notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`),
-            () => notify('打包失败，请改成整张一张试试', 'warn'),
-          );
+          const res = await exportBoardZip(doc, renderOpts, 'svg');
+          notify(`已打包下载 ${res.files} 块板 + 用量清单（zip ${Math.round(res.bytes / 1024)} KB）`);
         } else {
-          exportSVG(doc, renderOpts);
-          notify('已开始下载');
+          const res = exportSVG(doc, renderOpts);
+          notify(`已下载 SVG · ${Math.round(res.bytes / 1024)} KB`);
         }
       } else if (fmt === 'pdf') {
-        exportPDF(doc, pdfOpts);
-        notify('已开始下载');
+        const res = exportPDF(doc, pdfOpts);
+        notify(`已下载 PDF · ${res.pages} 页`);
       } else if (fmt === 'csv') {
         exportCSV(doc);
         notify('已开始下载');
@@ -263,7 +262,11 @@ export default function ExportDialog({ onClose }: Props) {
       onClose();
     } catch (err) {
       console.error(err);
-      notify('导出失败，请重试', 'warn');
+      // 把真实原因说出来：以前不管什么错都只弹「导出失败，请重试」，
+      // 大图导出失败时用户完全不知道是画布太大还是内存不够
+      notify(err instanceof Error ? err.message : '导出失败，请重试', 'warn');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -539,19 +542,28 @@ export default function ExportDialog({ onClose }: Props) {
                       </span>
                       显示色号
                     </div>
-                    <div className="check-row" onClick={() => setBackground((v) => !v)}>
-                      <span className={'checkbox' + (background ? ' on' : '')}>
-                        <IconCheck width={11} height={11} />
-                      </span>
-                      白色背景
-                    </div>
-                    <div className="check-row" onClick={() => setTransparent((v) => !v)}>
-                      <span className={'checkbox' + (transparent ? ' on' : '')}>
-                        <IconCheck width={11} height={11} />
-                      </span>
-                      透明背景
-                    </div>
+                    {fmt !== 'pdf' && (
+                      <>
+                        <div className="check-row" onClick={() => setBackground((v) => !v)}>
+                          <span className={'checkbox' + (background ? ' on' : '')}>
+                            <IconCheck width={11} height={11} />
+                          </span>
+                          白色背景
+                        </div>
+                        <div className="check-row" onClick={() => setTransparent((v) => !v)}>
+                          <span className={'checkbox' + (transparent ? ' on' : '')}>
+                            <IconCheck width={11} height={11} />
+                          </span>
+                          透明背景
+                        </div>
+                      </>
+                    )}
                   </div>
+                  {fmt === 'pdf' && (
+                    <span className="hint" style={{ display: 'block', marginTop: -4 }}>
+                      PDF 是打印用的纸，底色始终是白的，所以这里没有「背景 / 透明」两项。
+                    </span>
+                  )}
                   <div className="field" style={{ marginTop: 2 }}>
                     <label>豆子形状</label>
                     <div className="segmented" style={{ alignSelf: 'flex-start' }}>
@@ -613,16 +625,9 @@ export default function ExportDialog({ onClose }: Props) {
                         placeholder="例如：本图纸由 XXX 制作"
                         onChange={(e) => setWatermarkText(e.target.value)}
                       />
-                      <label style={{ marginTop: 6 }}>
-                        水印地址（{fmt === 'pdf' ? 'PDF 里可以直接点开' : '会写在文字旁边'}）
-                      </label>
-                      <input
-                        className="input"
-                        value={watermarkUrl}
-                        placeholder="https://"
-                        onChange={(e) => setWatermarkUrl(e.target.value)}
-                      />
-                      <span className="hint">留空则不写地址；想署名自己就改上面的文字</span>
+                      <span className="hint">
+                        只在左下角印这一行字。地址不再另印一行 —— 右下角的二维码扫出来就是同一个地址。
+                      </span>
                     </div>
                   )}
                   <div className="check-row" onClick={() => setQr((v) => !v)}>
@@ -767,18 +772,9 @@ export default function ExportDialog({ onClose }: Props) {
                       </button>
                     </div>
                   </div>
-                  <div className="check-row" onClick={() => setCalibration((v) => !v)}>
-                    <span className={'checkbox' + (calibration ? ' on' : '')}>
-                      <IconCheck width={11} height={11} />
-                    </span>
-                    页脚 50mm 校准标尺
-                  </div>
-                  <div className="check-row" onClick={() => setWithLegend((v) => !v)}>
-                    <span className={'checkbox' + (withLegend ? ' on' : '')}>
-                      <IconCheck width={11} height={11} />
-                    </span>
-                    再附一页完整用量清单
-                  </div>
+                  <span className="hint" style={{ display: 'block' }}>
+                    一板一页时每页下方自动列出「本板色号用量」，和 PNG / SVG 的用量表是同一套排版。
+                  </span>
                 </>
               )}
 
@@ -801,8 +797,8 @@ export default function ExportDialog({ onClose }: Props) {
           <button className="btn" onClick={onClose}>
             取消
           </button>
-          <button className="btn primary" onClick={doExport}>
-            <IconDownload width={14} height={14} /> 导出 {fmt.toUpperCase()}
+          <button className="btn primary" onClick={doExport} disabled={busy}>
+            <IconDownload width={14} height={14} /> {busy ? '导出中…' : `导出 ${fmt.toUpperCase()}`}
           </button>
         </div>
       </div>

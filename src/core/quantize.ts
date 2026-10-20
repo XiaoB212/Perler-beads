@@ -24,6 +24,11 @@ export interface QuantizeOptions {
   palette: BeadColor[];
   /** 边缘增强（让轮廓更清晰） */
   edgeBoost: number;
+  /**
+   * 逐格遮罩（长度 width*height）：1 保留、0 抠掉。
+   * 被抠掉的格子既不算颗粒、也不参与配色，用来「框选内容、去掉多余的板子」。
+   */
+  mask?: Uint8Array;
 }
 
 export const DEFAULT_QUANTIZE: Omit<QuantizeOptions, 'width' | 'height' | 'palette'> = {
@@ -53,6 +58,48 @@ function adjust(r: number, g: number, b: number, brightness: number, contrast: n
   return [Math.max(0, Math.min(255, rr)), Math.max(0, Math.min(255, gg)), Math.max(0, Math.min(255, bb))];
 }
 
+/** 源图上的裁剪框（单位：源图像素） */
+export interface CropRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/**
+ * 按「目标宽高比 + 缩放 + 中心点」算出要采样的源图矩形。
+ *
+ * 这是导入时「选哪一块为中心」的实现：中心点用 0~1 的归一化坐标，
+ * zoom=1 表示刚好铺满目标比例（也就是原来的 cover 行为），zoom>1 是放大裁得更小，
+ * zoom<1 只在图片比目标比例更扁时才有意义（会露出空白边）。
+ */
+export function cropRectFor(
+  srcW: number,
+  srcH: number,
+  aspect: number,
+  zoom = 1,
+  cx = 0.5,
+  cy = 0.5,
+): CropRect {
+  if (!srcW || !srcH) return { x: 0, y: 0, w: srcW, h: srcH };
+  const z = Math.max(1, zoom);
+  // 先按目标比例取出最大的框，再除以 zoom
+  let w = srcW;
+  let h = srcW / aspect;
+  if (h > srcH) {
+    h = srcH;
+    w = srcH * aspect;
+  }
+  w /= z;
+  h /= z;
+  let x = cx * srcW - w / 2;
+  let y = cy * srcH - h / 2;
+  // 不让框跑出图片
+  x = Math.min(Math.max(0, x), Math.max(0, srcW - w));
+  y = Math.min(Math.max(0, y), Math.max(0, srcH - h));
+  return { x, y, w, h };
+}
+
 /**
  * 从源图像采样出 width*height 的 RGB 数组。
  *
@@ -60,6 +107,8 @@ function adjust(r: number, g: number, b: number, brightness: number, contrast: n
  * - `stretch`（默认）：直接拉满，会变形
  * - `cover`：等比放大后居中裁掉多余部分，不变形（按板子拼的时候用这个，
  *   因为画布格子数由「板数 × 单板格数」锁死，不能为了迁就图片比例改格子数）
+ *
+ * 传了 `crop` 就只采那一块（用户手选的区域），此时忽略 `fit`。
  */
 export function sampleImage(
   img: HTMLImageElement | ImageBitmap | HTMLCanvasElement,
@@ -67,6 +116,7 @@ export function sampleImage(
   height: number,
   sample: 'point' | 'average',
   fit: 'stretch' | 'cover' = 'stretch',
+  crop?: CropRect,
 ): Uint8ClampedArray {
   const sw = 'naturalWidth' in img ? img.naturalWidth || img.width : img.width;
   const sh = 'naturalHeight' in img ? img.naturalHeight || img.height : img.height;
@@ -81,7 +131,12 @@ export function sampleImage(
   let sy = 0;
   let ssw = sw;
   let ssh = sh;
-  if (fit === 'cover' && sw > 0 && sh > 0) {
+  if (crop && crop.w > 0 && crop.h > 0) {
+    sx = crop.x;
+    sy = crop.y;
+    ssw = crop.w;
+    ssh = crop.h;
+  } else if (fit === 'cover' && sw > 0 && sh > 0) {
     const dstRatio = width / height;
     const srcRatio = sw / sh;
     if (srcRatio > dstRatio) {
@@ -94,6 +149,171 @@ export function sampleImage(
   }
   ctx.drawImage(img as CanvasImageSource, sx, sy, ssw, ssh, 0, 0, width, height);
   return ctx.getImageData(0, 0, width, height).data;
+}
+
+/**
+ * 一键抠图：从四边往里做连通填充，把和边缘颜色接近的一整片判成背景。
+ *
+ * 和 quantizeImage 里只认「白色」不同，这里认的是「边缘那圈是什么颜色」——
+ * 拍在桌上的玩偶、截图带浅灰底，都能一键抠掉，不用手动一点点涂。
+ */
+export function backgroundMask(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  tolerance = 26,
+): Uint8Array {
+  const total = width * height;
+  const mask = new Uint8Array(total).fill(1);
+  if (!total) return mask;
+
+  // 四条边上取样，取出现最多的颜色当「背景色」
+  const bucket = new Map<number, number>();
+  const add = (i: number) => {
+    const key = ((data[i * 4] >> 3) << 10) | ((data[i * 4 + 1] >> 3) << 5) | (data[i * 4 + 2] >> 3);
+    bucket.set(key, (bucket.get(key) ?? 0) + 1);
+  };
+  for (let x = 0; x < width; x++) {
+    add(x);
+    add((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y++) {
+    add(y * width);
+    add(y * width + width - 1);
+  }
+  let bestKey = 0;
+  let bestCount = -1;
+  for (const [k, v] of bucket) {
+    if (v > bestCount) {
+      bestCount = v;
+      bestKey = k;
+    }
+  }
+  const br = ((bestKey >> 10) & 31) << 3;
+  const bg = ((bestKey >> 5) & 31) << 3;
+  const bb = (bestKey & 31) << 3;
+  const tol2 = tolerance * tolerance * 3;
+
+  const near = (i: number) => {
+    const dr = data[i * 4] - br;
+    const dg = data[i * 4 + 1] - bg;
+    const db = data[i * 4 + 2] - bb;
+    return dr * dr + dg * dg + db * db <= tol2;
+  };
+
+  const seen = new Uint8Array(total);
+  const stack: number[] = [];
+  const seed = (i: number) => {
+    if (seen[i] || !near(i)) return;
+    seen[i] = 1;
+    stack.push(i);
+  };
+  for (let x = 0; x < width; x++) {
+    seed(x);
+    seed((height - 1) * width + x);
+  }
+  for (let y = 0; y < height; y++) {
+    seed(y * width);
+    seed(y * width + width - 1);
+  }
+  while (stack.length) {
+    const i = stack.pop()!;
+    mask[i] = 0;
+    const x = i % width;
+    const y = (i / width) | 0;
+    if (x > 0) seed(i - 1);
+    if (x < width - 1) seed(i + 1);
+    if (y > 0) seed(i - width);
+    if (y < height - 1) seed(i + width);
+  }
+  return mask;
+}
+
+
+/**
+ * 魔棒：从点下去的那一格开始，把和它颜色接近且连通的区域整片标出来。
+ *
+ * 和 backgroundMask 的区别是「种子点由用户点」——一键抠背景只认四边那圈颜色，
+ * 抠完背景后小面积色块留在里面的那一块，就得靠魔棒去点它。
+ * 返回 1=命中（该抠掉/该补回），0=没碰到。
+ */
+export function magicWandMask(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+  seedX: number,
+  seedY: number,
+  tolerance = 26,
+  diagonal = false,
+  /** true=只吃和落点连通的那一片（默认）；false=全图同色都吃，不管连不连 */
+  contiguous = true,
+): Uint8Array {
+  const total = width * height;
+  const out = new Uint8Array(total);
+  const sx = Math.max(0, Math.min(width - 1, Math.floor(seedX)));
+  const sy = Math.max(0, Math.min(height - 1, Math.floor(seedY)));
+  if (!total) return out;
+
+  const sr = data[(sy * width + sx) * 4];
+  const sg = data[(sy * width + sx) * 4 + 1];
+  const sb = data[(sy * width + sx) * 4 + 2];
+  const tol2 = tolerance * tolerance * 3;
+  const near = (i: number) => {
+    const dr = data[i * 4] - sr;
+    const dg = data[i * 4 + 1] - sg;
+    const db = data[i * 4 + 2] - sb;
+    return dr * dr + dg * dg + db * db <= tol2;
+  };
+
+  const start = sy * width + sx;
+  if (!near(start)) {
+    out[start] = 1;
+    return out;
+  }
+
+  // 不连续模式：整张图扫一遍，颜色接近的都算命中。
+  // 用途是「图里另有几个一样的白点 / 同色零碎块」—— 一个个点太啰嗦。
+  if (!contiguous) {
+    for (let i = 0; i < total; i++) if (near(i)) out[i] = 1;
+    return out;
+  }
+  const seen = new Uint8Array(total);
+  const stack: number[] = [start];
+  seen[start] = 1;
+  while (stack.length) {
+    const i = stack.pop()!;
+    out[i] = 1;
+    const x = i % width;
+    const y = (i / width) | 0;
+    // 只走 4 邻域：对角连通会让魔棒顺着斜向细缝漏出去，整张图被吃掉
+    if (x > 0 && !seen[i - 1] && near(i - 1)) {
+      seen[i - 1] = 1;
+      stack.push(i - 1);
+    }
+    if (x < width - 1 && !seen[i + 1] && near(i + 1)) {
+      seen[i + 1] = 1;
+      stack.push(i + 1);
+    }
+    if (y > 0 && !seen[i - width] && near(i - width)) {
+      seen[i - width] = 1;
+      stack.push(i - width);
+    }
+    if (y < height - 1 && !seen[i + width] && near(i + width)) {
+      seen[i + width] = 1;
+      stack.push(i + width);
+    }
+    if (diagonal) {
+      const cand = [i - width - 1, i - width + 1, i + width - 1, i + width + 1];
+      for (const j of cand) {
+        if (j < 0 || j >= total) continue;
+        if (Math.abs((j % width) - x) !== 1) continue;
+        if (seen[j] || !near(j)) continue;
+        seen[j] = 1;
+        stack.push(j);
+      }
+    }
+  }
+  return out;
 }
 
 /** k-means 选择代表色（Lab 空间） */
@@ -243,6 +463,12 @@ export function quantizeImage(
   const pl: PaletteLab = buildPaletteLab(palette);
   const cells = new Uint16Array(total);
   if (!palette.length) return { cells, palette, usedCount: 0 };
+
+  // 用户手抠的范围优先于自动白底：抠掉的格子既不配色也不算颗数
+  const mask = opts.mask;
+  if (mask && mask.length === total) {
+    for (let i = 0; i < total; i++) if (!mask[i]) isBg[i] = 1;
+  }
 
   let validCount = 0;
   for (let i = 0; i < total; i++) if (!isBg[i]) validCount++;
