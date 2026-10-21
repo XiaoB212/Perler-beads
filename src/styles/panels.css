@@ -1466,3 +1466,157 @@
   font-size: 11px;
   color: var(--ink-3);
 }
+
+/* 设置页：功能列表顺序（把左侧那列按钮挪来挪去） */
+.rail-order {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 6px;
+  border-radius: 8px;
+  background: var(--bg-sunk, rgba(128, 128, 150, 0.1));
+}
+
+.rail-order-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ro-label {
+  flex: 1 1 auto;
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.ro-btn {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised, transparent);
+  color: var(--ink-3);
+  cursor: pointer;
+}
+
+.ro-btn:hover:not(:disabled) {
+  color: var(--ink-1);
+  border-color: var(--ink-4, var(--line));
+}
+
+.ro-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.mini-btn {
+  margin-left: auto;
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised, transparent);
+  color: var(--ink-3);
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.mini-btn:hover {
+  color: var(--ink-1);
+}
+
+.hint-line {
+  margin: 6px 2px 0;
+  font-size: 10.5px;
+  line-height: 1.6;
+  color: var(--ink-4, var(--ink-3));
+}
+
+.about-actions {
+  display: flex;
+  gap: 6px;
+  margin: 4px 0 2px;
+}
+
+.about-actions .btn {
+  flex: 1 1 0;
+  justify-content: center;
+  font-size: 11.5px;
+}
+
+/* 图纸预览：可缩放抠细节 */
+.pv-box {
+  align-items: stretch;
+}
+
+.pv-box .preview-label {
+  position: absolute;
+}
+
+.pv-view {
+  position: relative;
+  width: 100%;
+  min-height: 240px;
+  max-height: 430px;
+  overflow: auto;
+  padding: 6px;
+  border-radius: 6px;
+  background: var(--bg-sunk, rgba(0, 0, 0, 0.16));
+}
+
+.pv-stage {
+  position: relative;
+  margin: 0 auto;
+}
+
+.pv-stage canvas {
+  max-width: none;
+  max-height: none;
+}
+
+.pv-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  flex-wrap: wrap;
+}
+
+.pv-btn {
+  min-width: 24px;
+  height: 22px;
+  padding: 0 7px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg-raised, transparent);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pv-btn:hover {
+  color: var(--ink-1);
+  border-color: var(--ink-4, var(--line));
+}
+
+.pv-btn.wide {
+  font-size: 10.5px;
+}
+
+.pv-pct {
+  min-width: 34px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--ink-2);
+  font-variant-numeric: tabular-nums;
+}
+
+.pv-pos {
+  margin-left: auto;
+  font-size: 10.5px;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
+}

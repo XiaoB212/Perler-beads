@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from './core/store';
 import { applyTheme, getThemeMode, resolveTheme, setThemeMode as setThemeModePersist, watchSystemTheme, type ThemeMode } from './core/theme';
 import CanvasStage from './components/CanvasStage';
@@ -6,11 +6,13 @@ import ColorPanel from './components/ColorPanel';
 import UsagePanel from './components/UsagePanel';
 import SettingsPanel from './components/SettingsPanel';
 import ColorManager from './components/ColorManager';
-import ImportDialog, { type ImportSeed } from './components/ImportDialog';
+import ImportDialog, { type ImportSeed, type MaskTool } from './components/ImportDialog';
 import ExportDialog from './components/ExportDialog';
 import NewCanvasDialog from './components/NewCanvasDialog';
 import ProjectsDialog from './components/ProjectsDialog';
 import ShortcutsDialog from './components/ShortcutsDialog';
+import WelcomeDialog from './components/WelcomeDialog';
+import CornerBadge from './components/CornerBadge';
 import {
   IconBoard,
   IconBucket,
@@ -40,6 +42,7 @@ import {
   IconUndo,
   IconUpload,
   IconWand,
+  IconBook,
 } from './components/Icons';
 import type { Tool } from './core/types';
 import { eventToBinding, keyLabel, loadKeymap, resolveAction, type KeyMap } from './core/keymap';
@@ -56,8 +59,10 @@ import {
 import { boardCount } from './core/board';
 import { DEFAULT_PALETTE_KEY, palettePreset } from './core/palette';
 import { decodeShare, progressStat } from './core/share';
+import { noticeSeen } from './core/announce';
+import { RAIL_DEFAULTS, clearRailOrder, moveRailItem, readRailOrder, writeRailOrder } from './core/rail';
 
-type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys';
+type Dialog = null | 'new' | 'import' | 'export' | 'projects' | 'colors' | 'keys' | 'welcome';
 type SideTab = 'colors' | 'usage' | 'settings';
 
 /** 右侧面板宽度：可拖拽调整，拖完记在本地，下次打开还是这个宽度 */
@@ -95,6 +100,17 @@ function toolHint(keymap: KeyMap, tool: Tool): string {
   return bound ? ` (${keyLabel(bound).join('+')})` : '';
 }
 
+/** 左侧功能列表的一行：工具、开关、还是打开某个对话框 */
+interface RailItem {
+  id: string;
+  label: string;
+  group: 'tool' | 'action' | 'file';
+  icon: (p: { width: number; height: number }) => JSX.Element;
+  active: boolean;
+  title: string;
+  run: () => void;
+}
+
 export default function App() {
   const doc = useEditor((s) => s.doc);
   const tool = useEditor((s) => s.tool);
@@ -128,9 +144,28 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
   /** 上次生成图纸时用的图片和参数：支持「重调图片」二次编辑 */
   const [lastSeed, setLastSeed] = useState<ImportSeed | null>(null);
   const [seedForOpen, setSeedForOpen] = useState<ImportSeed | null>(null);
-  const openImport = useCallback((seed: ImportSeed | null = null) => {
+  /** 从「抠图」按钮进来时直接落在魔棒上 */
+  const [importTool, setImportTool] = useState<MaskTool>('move');
+  const openImport = useCallback((seed: ImportSeed | null = null, tool: MaskTool = 'move') => {
     setSeedForOpen(seed);
+    setImportTool(tool);
     setDialog('import');
+  }, []);
+  /** 左侧功能列表的顺序（可在设置里调） */
+  /** 公告弹窗先看哪一页：公告 or 新手手册 */
+  const [welcomeTab, setWelcomeTab] = useState<'notice' | 'guide'>('notice');
+  const openWelcome = useCallback((tab: 'notice' | 'guide') => {
+    setWelcomeTab(tab);
+    setDialog('welcome');
+  }, []);
+  const [railOrder, setRailOrderState] = useState<string[]>(() => readRailOrder());
+  const setRailOrder = useCallback((next: string[]) => {
+    setRailOrderState(next);
+    writeRailOrder(next);
+  }, []);
+  /** 第一次打开（或升到新版本）自动弹公告，点过「不再提示」就不会再弹 */
+  useEffect(() => {
+    if (!noticeSeen()) setDialog((cur) => cur ?? 'welcome');
   }, []);
   const [dragOver, setDragOver] = useState(false);
   const [themeMode, setThemeModeState] = useState<ThemeMode>(() => getThemeMode());
@@ -531,6 +566,112 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
   const cur = doc.palette[colorIndex];
   const soloColor = useEditor((s) => s.soloColor);
 
+  const openWand = useCallback(() => openImport(lastSeed, 'wandCut'), [openImport, lastSeed]);
+
+  /** 左侧功能列表：顺序由用户自己定（设置 → 功能列表顺序），新条目自动补到末尾 */
+  const railItems = useMemo<RailItem[]>(() => {
+    const toolById = new Map(TOOLS.map((t) => [t.key as string, t]));
+    const out: RailItem[] = [];
+    for (const id of railOrder) {
+      const def = RAIL_DEFAULTS.find((d) => d.id === id);
+      if (!def) continue;
+      const t = toolById.get(id);
+      if (t) {
+        out.push({
+          id,
+          label: def.label,
+          group: def.group,
+          icon: t.icon,
+          active: tool === t.key,
+          title: `${t.label}${toolHint(keymap, t.key)}`,
+          run: () => setTool(t.key),
+        });
+        continue;
+      }
+      const base = { id, label: def.label, group: def.group };
+      switch (id) {
+        case 'wand':
+          out.push({
+            ...base,
+            icon: (p) => <IconWand {...p} />,
+            active: false,
+            title: '抠图 / 魔法棒：打开图片转图纸，用魔棒点一片、框选一块，把背景抠掉再生成图纸',
+            run: openWand,
+          });
+          break;
+        case 'progress':
+          out.push({
+            ...base,
+            icon: (p) => <IconCheck {...p} />,
+            active: flags.progressMode,
+            title: '进度模式：点击勾选已拼好的豆子 (P)',
+            run: () => toggleFlag('progressMode'),
+          });
+          break;
+        case 'online':
+          out.push({
+            ...base,
+            icon: (p) => <IconSparkle {...p} />,
+            active: flags.onlineMode,
+            title: '线上拼豆模式：对色判对错 + 单色高亮 + 进度环 + 分享链接',
+            run: () => setOnlineMode(!flags.onlineMode),
+          });
+          break;
+        case 'grid':
+          out.push({
+            ...base,
+            icon: (p) => <IconGrid {...p} />,
+            active: flags.grid,
+            title: '网格线 (G)',
+            run: () => toggleFlag('grid'),
+          });
+          break;
+        case 'symmetry':
+          out.push({
+            ...base,
+            icon: (p) => <IconLayers {...p} />,
+            active: flags.symmetryX,
+            title: '左右对称 (X)',
+            run: () => toggleFlag('symmetryX'),
+          });
+          break;
+        case 'colors':
+          out.push({
+            ...base,
+            icon: (p) => <IconPalette {...p} />,
+            active: false,
+            title: '色号管理：改色、换色、导入导出色板',
+            run: () => {
+              setColorManagerTab('doc');
+              setDialog('colors');
+            },
+          });
+          break;
+        case 'projects':
+          out.push({
+            ...base,
+            icon: (p) => <IconBoard {...p} />,
+            active: false,
+            title: '我的图纸',
+            run: () => setDialog('projects'),
+          });
+          break;
+        case 'guide':
+          out.push({
+            ...base,
+            icon: (p) => <IconBook {...p} />,
+            active: false,
+            title: '新手手册 / 更新公告',
+            run: () => openWelcome('guide'),
+          });
+          break;
+        default:
+          break;
+      }
+    }
+    return out;
+  }, [railOrder, tool, keymap, flags, openWand, openWelcome]);
+
   const sideBody = (t: SideTab) => {
     if (t === 'colors')
       return (
@@ -550,6 +691,10 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
         onAutoSaveChange={updateAutoSave}
         onSaveNow={saveNow}
         autoSavedAt={autoSavedAt}
+        railOrder={railOrder}
+        onRailOrder={setRailOrder}
+        onOpenGuide={() => openWelcome('guide')}
+        onOpenNotice={() => openWelcome('notice')}
       />
     );
   };
@@ -653,74 +798,19 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
         {/* ============ 主区 ============ */}
         <div className="main">
           <nav className="rail">
-            {TOOLS.slice(0, 7).map((t) => (
-              <button
-                key={t.key}
-                className={'rail-btn' + (tool === t.key ? ' active' : '')}
-                onClick={() => setTool(t.key)}
-                title={`${t.label}${toolHint(keymap, t.key)}`}
-              >
-                <t.icon width={17} height={17} />
-                <span className="rail-label">{t.label}</span>
-              </button>
+            {railItems.map((it, i) => (
+              <Fragment key={it.id}>
+                {i > 0 && railItems[i - 1].group !== it.group && <div className="rail-sep" />}
+                <button
+                  className={'rail-btn' + (it.active ? ' active' : '')}
+                  onClick={it.run}
+                  title={it.title}
+                >
+                  <it.icon width={17} height={17} />
+                  <span className="rail-label">{it.label}</span>
+                </button>
+              </Fragment>
             ))}
-            <div className="rail-sep" />
-            <button
-              className={'rail-btn' + (tool === 'pan' ? ' active' : '')}
-              onClick={() => setTool('pan')}
-              title="平移画布（空格）"
-            >
-              <IconHand width={17} height={17} />
-              <span className="rail-label">平移</span>
-            </button>
-            <div className="rail-sep" />
-            <button
-              className={'rail-btn' + (flags.progressMode ? ' active' : '')}
-              onClick={() => toggleFlag('progressMode')}
-              title="进度模式：点击勾选已拼好的豆子 (P)"
-            >
-              <IconCheck width={17} height={17} />
-              <span className="rail-label">进度</span>
-            </button>
-            <button
-              className={'rail-btn' + (flags.onlineMode ? ' active' : '')}
-              onClick={() => setOnlineMode(!flags.onlineMode)}
-              title="线上拼豆模式：对色判对错 + 单色高亮 + 进度环 + 分享链接"
-            >
-              <IconSparkle width={17} height={17} />
-              <span className="rail-label">线上</span>
-            </button>
-            <button
-              className={'rail-btn' + (flags.grid ? ' active' : '')}
-              onClick={() => toggleFlag('grid')}
-              title="网格线"
-            >
-              <IconGrid width={17} height={17} />
-              <span className="rail-label">网格</span>
-            </button>
-            <button
-              className={'rail-btn' + (flags.symmetryX ? ' active' : '')}
-              onClick={() => toggleFlag('symmetryX')}
-              title="左右对称"
-            >
-              <IconLayers width={17} height={17} />
-              <span className="rail-label">对称</span>
-            </button>
-            <div className="rail-sep" />
-            <button
-              className="rail-btn"
-              onClick={() => {
-                setColorManagerTab('doc');
-                setDialog('colors');
-              }}
-              title="色号管理"
-            >
-              <IconPalette width={17} height={17} />
-              <span className="rail-label">色号</span>
-            </button>
-            <button className="rail-btn" onClick={() => setDialog('projects')} title="我的图纸">
-              <IconBoard width={17} height={17} />
-            </button>
           </nav>
 
           <div className="workspace">
@@ -978,8 +1068,14 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
                   <button className="btn block" onClick={() => { setSheet(null); openImport(); }}>
                     <IconImage width={14} height={14} /> 图片转图纸
                   </button>
+                  <button className="btn block" onClick={() => { setSheet(null); openImport(lastSeed, 'wandCut'); }}>
+                    <IconWand width={14} height={14} /> 抠图 / 魔法棒
+                  </button>
                   <button className="btn block" onClick={() => { setSheet(null); setDialog('projects'); }}>
                     <IconFolder width={14} height={14} /> 我的图纸
+                  </button>
+                  <button className="btn block" onClick={() => { setSheet(null); openWelcome('guide'); }}>
+                    <IconBook width={14} height={14} /> 新手手册 / 公告
                   </button>
                   <button className="btn block primary" onClick={() => { setSheet(null); setDialog('export'); }}>
                     <IconUpload width={14} height={14} /> 导出图纸
@@ -1009,6 +1105,7 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
         <ImportDialog
           initialFile={dropped}
           initialSeed={seedForOpen}
+          initialTool={importTool}
           onSeed={setLastSeed}
           onClose={() => {
             setDialog(null);
@@ -1022,6 +1119,9 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
       {dialog === 'colors' && (
         <ColorManager onClose={() => setDialog(null)} initialTab={colorManagerTab} />
       )}
+      {dialog === 'welcome' && (
+        <WelcomeDialog tab={welcomeTab} onClose={() => setDialog(null)} />
+      )}
       {dialog === 'keys' && (
         <ShortcutsDialog
           onClose={() => setDialog(null)}
@@ -1029,6 +1129,9 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
           onChange={setKeymap}
         />
       )}
+
+      {/* ============ 右下角作者角标 ============ */}
+      <CornerBadge />
 
       {/* ============ Toast ============ */}
       <div className="toast-wrap">

@@ -20,7 +20,22 @@ import {
   pushBackup,
   type AutoSaveConfig,
 } from '../core/backup';
-import { IconBoard, IconCode, IconGrid, IconHole, IconMirrorX, IconMirrorY, IconMoon, IconRuler, IconSun } from './Icons';
+import { RAIL_DEFAULTS, clearRailOrder, moveRailItem } from '../core/rail';
+import { NOTICE } from '../core/announce';
+import {
+  IconBoard,
+  IconBook,
+  IconCode,
+  IconGithub,
+  IconGrid,
+  IconHole,
+  IconMirrorX,
+  IconMirrorY,
+  IconMoon,
+  IconRuler,
+  IconSparkle,
+  IconSun,
+} from './Icons';
 
 interface Props {
   themeMode?: ThemeMode;
@@ -30,6 +45,12 @@ interface Props {
   onAutoSaveChange?: (patch: Partial<AutoSaveConfig>) => void;
   onSaveNow?: () => void;
   autoSavedAt?: number;
+  /** 左侧功能列表的顺序与回调 */
+  railOrder?: string[];
+  onRailOrder?: (order: string[]) => void;
+  /** 打开新手手册 / 更新公告 */
+  onOpenGuide?: () => void;
+  onOpenNotice?: () => void;
 }
 
 const THEMES: { key: ThemeMode; label: string; icon: (p: { width: number; height: number }) => JSX.Element }[] = [
@@ -58,6 +79,10 @@ export default function SettingsPanel({
   onAutoSaveChange,
   onSaveNow,
   autoSavedAt,
+  railOrder,
+  onRailOrder,
+  onOpenGuide,
+  onOpenNotice,
 }: Props) {
   const doc = useEditor((s) => s.doc);
   const flags = useEditor((s) => s.flags);
@@ -397,6 +422,42 @@ export default function SettingsPanel({
 
       <div className="divider" />
       <div className="panel-head">
+        <span className="panel-title">功能列表顺序</span>
+        <button className="mini-btn" onClick={() => { clearRailOrder(); onRailOrder?.(RAIL_DEFAULTS.map((d) => d.id)); }}>
+          恢复默认
+        </button>
+      </div>
+      <div className="rail-order">
+        {(railOrder ?? RAIL_DEFAULTS.map((d) => d.id)).map((id, i, arr) => {
+          const def = RAIL_DEFAULTS.find((d) => d.id === id);
+          if (!def) return null;
+          return (
+            <div className="rail-order-row" key={id}>
+              <span className="ro-label">{def.label}</span>
+              <button
+                className="ro-btn"
+                disabled={i === 0}
+                title="往上挪"
+                onClick={() => onRailOrder?.(moveRailItem(arr, id, -1))}
+              >
+                <IconMirrorY width={12} height={12} style={{ transform: 'rotate(-90deg)' }} />
+              </button>
+              <button
+                className="ro-btn"
+                disabled={i === arr.length - 1}
+                title="往下挪"
+                onClick={() => onRailOrder?.(moveRailItem(arr, id, 1))}
+              >
+                <IconMirrorY width={12} height={12} style={{ transform: 'rotate(90deg)' }} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <p className="hint-line">左侧那列按钮按这个顺序排；新加的按钮会自动补到最后，挪完立刻生效。</p>
+
+      <div className="divider" />
+      <div className="panel-head">
         <span className="panel-title">关于</span>
       </div>
       <div className="about-box">
@@ -408,12 +469,20 @@ export default function SettingsPanel({
           <span>构建</span>
           <b>{__APP_BUILD__}</b>
         </div>
+        <div className="about-actions">
+          <button className="btn block" onClick={onOpenGuide}>
+            <IconBook width={13} height={13} /> 新手手册
+          </button>
+          <button className="btn block" onClick={onOpenNotice}>
+            <IconSparkle width={13} height={13} /> 更新公告
+          </button>
+        </div>
         <div className="about-links">
           <a href="https://xiaob212.github.io/Perler-beads/" target="_blank" rel="noreferrer">
             在线版
           </a>
           <a href="https://github.com/XiaoB212/Perler-beads" target="_blank" rel="noreferrer">
-            GitHub
+            <IconGithub width={11} height={11} /> GitHub
           </a>
         </div>
       </div>
@@ -422,30 +491,12 @@ export default function SettingsPanel({
         <span className="panel-title">最近更新</span>
       </div>
       <ul className="update-list">
-        <li>
-          <b>透明 PNG 自动抠掉</b>
-          <span>在抠图网站抠好、导出透明 PNG 再拖进来，透明的地方直接算抠掉，不用再画一遍</span>
-        </li>
-        <li>
-          <b>去掉零散单颗</b>
-          <span>抖动留下的孤点自动并到邻居色，图案更干净，色号数基本不变</span>
-        </li>
-        <li>
-          <b>导入图片可以抠图了</b>
-          <span>框选 / 魔棒 / 笔刷 / 一键抠背景；抠掉的格子不配色、不算豆子、也不占板子</span>
-        </li>
-        <li>
-          <b>重调图片</b>
-          <span>生成完还能带着上次的裁切和抠图回到对话框接着改，不用重新找图</span>
-        </li>
-        <li>
-          <b>PDF 和 PNG / SVG 对齐</b>
-          <span>水印不再印地址，页脚去掉打印提示与 50 mm 校准尺，一板一页每页带本板用量</span>
-        </li>
-        <li>
-          <b>大图导出修好了</b>
-          <span>两万格以上的 PNG 不再静默失败；单格像素会自动降到浏览器画得出来的尺寸</span>
-        </li>
+        {NOTICE.items.map((it) => (
+          <li key={it.title}>
+            <b>{it.title}</b>
+            <span>{it.text}</span>
+          </li>
+        ))}
       </ul>
     </div>
   );

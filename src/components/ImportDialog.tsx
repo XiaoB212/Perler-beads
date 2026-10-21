@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useEditor } from '../core/store';
 import { DEFAULT_QUANTIZE, backgroundMask, cropRectFor, magicWandMask, quantizeImage, sampleImage } from '../core/quantize';
 import { BUILTIN_PALETTES, BRAND_LABEL, PALETTE_KEYS, palettePreset } from '../core/palette';
@@ -15,6 +15,8 @@ interface Props {
   initialSeed?: ImportSeed | null;
   /** 生成成功后把设置交回上层，供「再调一下」再来一遍 */
   onSeed?: (seed: ImportSeed) => void;
+  /** 从「抠图」入口进来时先选中某个抠图工具（默认魔棒） */
+  initialTool?: MaskTool;
 }
 
 /**
@@ -44,7 +46,7 @@ export interface ImportSeed {
 
 type Sample = 'point' | 'average';
 /** move=不改；paint/erase=笔刷；rect* = 框选一块矩形整块处理；wand* = 魔棒点一下选整片同色连通区 */
-type MaskTool = 'move' | 'paint' | 'erase' | 'rectCut' | 'rectKeep' | 'rectOnly' | 'wandCut' | 'wandKeep';
+export type MaskTool = 'move' | 'paint' | 'erase' | 'rectCut' | 'rectKeep' | 'rectOnly' | 'wandCut' | 'wandKeep';
 
 const isRectTool = (t: MaskTool) => t === 'rectCut' || t === 'rectKeep' || t === 'rectOnly';
 const isWandTool = (t: MaskTool) => t === 'wandCut' || t === 'wandKeep';
@@ -126,7 +128,7 @@ function TileStepper({
   );
 }
 
-export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed }: Props) {
+export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed, initialTool = 'move' }: Props) {
   const doc = useEditor((s) => s.doc);
   const applyImported = useEditor((s) => s.applyImported);
   const notify = useEditor((s) => s.notify);
@@ -174,7 +176,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   const [crop, setCrop] = useState(() => seed?.crop ?? { zoom: 1, cx: 0.5, cy: 0.5 });
   /** 手抠遮罩：0 = 抠掉（不算豆子、不占板子），长度必须等于 width*height */
   const [mask, setMask] = useState<Uint8Array | null>(() => seed?.mask ?? null);
-  const [tool, setTool] = useState<MaskTool>('move');
+  const [tool, setTool] = useState<MaskTool>(initialTool);
   const [brush, setBrush] = useState(2);
   const [tolerance, setTolerance] = useState(26);
   /** 魔棒是否走 8 邻域（默认 4 邻域，避免顺着斜向细缝漏出去把整张图吃掉） */
@@ -183,6 +185,14 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   const [wandGlobal, setWandGlobal] = useState(false);
   /** 生成时是否按内容裁掉四周空板 */
   const [trimToContent, setTrimToContent] = useState(true);
+  /** 预览放大倍数：抠细节时放到 8 倍，一格一格看得清 */
+  const [zoom, setZoom] = useState(1);
+  /** 放大后预览的真实显示尺寸（像素） */
+  const [stage, setStage] = useState({ w: 0, h: 0 });
+  /** 指针下的格子信息：坐标 + 色号 + 原图颜色 */
+  const [hoverInfo, setHoverInfo] = useState<string | null>(null);
+  /** 预览视口宽度：1 倍时正好铺满，不出现横向滚动条 */
+  const [viewW, setViewW] = useState(520);
 
   const fileRef = useRef<HTMLInputElement>(null);
   const previewRef = useRef<HTMLCanvasElement>(null);
@@ -206,6 +216,11 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   const wandHoverCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sourceGeomRef = useRef({ scale: 1, dw: 0, dh: 0 });
   const previewGeomRef = useRef({ x: 0, y: 0, w: 0, h: 0 });
+  /** 预览视口 / 内容层 / 缩放锚点 / 平移状态 */
+  const viewRef = useRef<HTMLDivElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
+  const zoomAnchorRef = useRef<{ fx: number; fy: number; cx: number; cy: number } | null>(null);
+  const panRef = useRef<{ x: number; y: number; sl: number; st: number } | null>(null);
 
   const width = boardSize * cols;
   const height = boardSize * rows;
@@ -343,6 +358,9 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   useEffect(() => {
     const canvas = previewRef.current;
     if (!canvas || !result) return;
+    // 放大时按更高分辨率重画一遍：只是把 4px 的格子拉大只会糊成一片，看不清边
+    const maxDim = Math.max(1, width, height);
+    const renderCell = Math.max(4, Math.min(36, Math.round(8 * zoom), Math.floor(4096 / maxDim)));
     const tmp = renderPatternCanvas(
       {
         ...doc,
@@ -353,7 +371,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
         palette: result.palette,
       },
       {
-        cellSize: 8,
+        cellSize: renderCell,
         grid: false,
         coords: false,
         background: null,
@@ -363,14 +381,17 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
         boardSize: boardSize > 0 ? boardSize : 0,
       },
     );
-    const maxW = 520;
-    const scale = Math.min(1, maxW / tmp.width);
-    canvas.width = Math.round(tmp.width * scale);
-    canvas.height = Math.round(tmp.height * scale);
+    canvas.width = tmp.width;
+    canvas.height = tmp.height;
     const ctx = canvas.getContext('2d')!;
     ctx.imageSmoothingEnabled = false;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(tmp, 0, 0);
+    // 屏幕上「一格」显示多大：1 倍时整幅宽度约 520px，放大就是再乘倍数
+    const baseCell = Math.min(4, Math.max(1, (viewW - 16) / Math.max(1, width)));
+    const displayCell = baseCell * zoom;
+    const k = displayCell / renderCell;
+    setStage({ w: Math.round(tmp.width * k), h: Math.round(tmp.height * k) });
     // 记住图案在画布里的实际位置，手抠时要把指针坐标换算回格子
     previewGeomRef.current = {
       x: 0,
@@ -378,7 +399,19 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
       w: canvas.width,
       h: canvas.height,
     };
-  }, [result, doc, width, height, boardSize]);
+  }, [result, doc, width, height, boardSize, zoom, viewW]);
+
+  /** 跟着面板宽度走：窗口拉宽、手机竖屏都能自适应 */
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      const w = Math.round(entries[0].contentRect.width);
+      if (w > 0) setViewW(w);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [img]);
 
   /** 遮罩图层：抠掉的格子盖一层灰，尺寸/位置跟预览 canvas 完全一致 */
   const drawMask = useCallback(() => {
@@ -426,6 +459,60 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   useEffect(() => {
     drawMask();
   }, [drawMask, mask, result]);
+
+  /** 预览缩放：滚轮以指针为中心放大，放大后可以拖动画布看细节 */
+  useEffect(() => {
+    const el = viewRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      if (e.shiftKey && !e.ctrlKey) return; // shift+滚轮留给横向滚动
+      e.preventDefault();
+      const stageEl = stageRef.current;
+      const box = el.getBoundingClientRect();
+      const sr = stageEl?.getBoundingClientRect();
+      zoomAnchorRef.current = {
+        fx: sr && sr.width ? (e.clientX - sr.left) / sr.width : 0.5,
+        fy: sr && sr.height ? (e.clientY - sr.top) / sr.height : 0.5,
+        cx: e.clientX - box.left,
+        cy: e.clientY - box.top,
+      };
+      setZoom((z) => Math.max(1, Math.min(8, z * Math.exp(-e.deltaY / 400))));
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [img]);
+
+  /** 放大后保持指针下的那一格不动，不会一缩一放就跑到别处 */
+  useLayoutEffect(() => {
+    const a = zoomAnchorRef.current;
+    zoomAnchorRef.current = null;
+    const box = viewRef.current;
+    const stageEl = stageRef.current;
+    if (!a || !box || !stageEl) return;
+    box.scrollLeft = a.fx * stageEl.offsetWidth - a.cx;
+    box.scrollTop = a.fy * stageEl.offsetHeight - a.cy;
+  }, [zoom, stage]);
+
+  /** 拖动平移：只看原图时左键就能拖；抠图工具下按住空格 / Alt / 中键拖 */
+  const onViewDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    const box = viewRef.current;
+    if (!box) return;
+    const wantPan = e.button === 1 || e.altKey || (tool === 'move' && e.button === 0);
+    if (!wantPan) return;
+    e.preventDefault();
+    box.setPointerCapture?.(e.pointerId);
+    panRef.current = { x: e.clientX, y: e.clientY, sl: box.scrollLeft, st: box.scrollTop };
+  };
+  const onViewMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const p = panRef.current;
+    const box = viewRef.current;
+    if (!p || !box) return;
+    box.scrollLeft = p.sl - (e.clientX - p.x);
+    box.scrollTop = p.st - (e.clientY - p.y);
+  };
+  const onViewUp = () => {
+    panRef.current = null;
+  };
 
   /**
    * 魔棒悬停预览：把「点下去会吃哪一片」先标成半透明色块。
@@ -640,6 +727,17 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
     paintAt(e, false);
   };
   const onMaskMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    // 指针下是哪一格、什么色号：放大抠细节时靠它对齐
+    const hp = cellAt(e);
+    if (hp) {
+      const hx = Math.floor(hp.x);
+      const hy = Math.floor(hp.y);
+      if (hx >= 0 && hy >= 0 && hx < width && hy < height) {
+        const ci = result?.cells[hy * width + hx] ?? 0;
+        const bc = result?.palette[ci];
+        setHoverInfo(`${hx + 1},${hy + 1}${bc ? ' · ' + bc.code : ''}`);
+      }
+    }
     if (isWandTool(tool)) {
       // 悬停预览：不用真的点下去就能看出魔棒会吃哪一片
       const p = cellAt(e);
@@ -1001,32 +1099,67 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
                 </div>
               </div>
               <div>
-                <div className="preview-box" style={{ minHeight: 260 }}>
+                <div className="preview-box pv-box">
                   <span className="preview-label">
-                    图纸预览 {result ? `· ${result.usedCount} 色` : ''}
+                    图纸预览 {result ? `· ${result.usedCount} 色` : ''} · 滚轮放大看细节
                   </span>
-                  <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
-                    <canvas ref={previewRef} />
-                    <canvas
-                      ref={maskRef}
-                      data-mask="1"
-                      style={{
-                        position: 'absolute',
-                        left: 0,
-                        top: 0,
-                        cursor: tool === 'move' ? 'default' : 'crosshair',
-                        touchAction: 'none',
-                      }}
-                      onPointerDown={onMaskDown}
-                      onPointerMove={onMaskMove}
-                      onPointerUp={onMaskUp}
-                      onPointerCancel={onMaskUp}
-                      onPointerLeave={clearWandHover}
-                    />
-                    <canvas
-                      ref={wandHoverCanvasRef}
-                      style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none' }}
-                    />
+                  <div
+                    className="pv-view"
+                    ref={viewRef}
+                    onPointerDown={onViewDown}
+                    onPointerMove={onViewMove}
+                    onPointerUp={onViewUp}
+                    onPointerCancel={onViewUp}
+                    style={{ cursor: tool === 'move' ? 'grab' : 'crosshair' }}
+                  >
+                    <div
+                      className="pv-stage"
+                      ref={stageRef}
+                      style={{ width: stage.w || undefined, height: stage.h || undefined }}
+                    >
+                      <canvas ref={previewRef} style={{ width: '100%', height: '100%', display: 'block' }} />
+                      <canvas
+                        ref={maskRef}
+                        data-mask="1"
+                        style={{
+                          position: 'absolute',
+                          left: 0,
+                          top: 0,
+                          width: '100%',
+                          height: '100%',
+                          cursor: tool === 'move' ? 'default' : 'crosshair',
+                          touchAction: 'none',
+                        }}
+                        onPointerDown={onMaskDown}
+                        onPointerMove={onMaskMove}
+                        onPointerUp={onMaskUp}
+                        onPointerCancel={onMaskUp}
+                        onPointerLeave={() => {
+                          clearWandHover();
+                          setHoverInfo(null);
+                        }}
+                      />
+                      <canvas
+                        ref={wandHoverCanvasRef}
+                        style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}
+                      />
+                    </div>
+                  </div>
+                  <div className="pv-bar">
+                    <button className="pv-btn" onClick={() => setZoom((z) => Math.max(1, z / 1.5))} title="缩小">
+                      −
+                    </button>
+                    <span className="pv-pct">×{zoom < 2 ? zoom.toFixed(1) : zoom.toFixed(0)}</span>
+                    <button className="pv-btn" onClick={() => setZoom((z) => Math.min(8, z * 1.5))} title="放大">
+                      +
+                    </button>
+                    <button className="pv-btn wide" onClick={() => setZoom(1)} title="回到适应大小">
+                      适应
+                    </button>
+                    <button className="pv-btn wide" onClick={() => setZoom(8)} title="放到最大，一格一格抠">
+                      最大
+                    </button>
+                    {hoverInfo && <span className="pv-pos">{hoverInfo}</span>}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
