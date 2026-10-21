@@ -64,6 +64,20 @@
   text-transform: uppercase;
   color: var(--ink-3);
 }
+/* 版本号：顶栏一直显示，用来判断线上跑的是不是最新一版 */
+.brand-ver {
+  margin-left: 6px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: var(--bg-sunk, rgba(128, 128, 150, 0.14));
+  color: var(--ink-2);
+  font-size: 9px;
+  font-style: normal;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  vertical-align: 1px;
+  cursor: help;
+}
 
 .doc-title-wrap {
   display: flex;

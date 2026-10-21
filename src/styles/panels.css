@@ -942,6 +942,15 @@
   color: var(--ink-3);
   line-height: 1.6;
 }
+/* 载入图片前就把「能抠图」说清楚，否则容易以为这个对话框只能整体转换 */
+.dropzone span.dropzone-tip {
+  max-width: 380px;
+  margin-top: 2px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  background: var(--bg-sunk, rgba(128, 128, 150, 0.1));
+  color: var(--ink-2);
+}
 
 /* ---------- 图纸列表 ---------- */
 .project-list {
@@ -1395,4 +1404,65 @@
   .project-list {
     grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
   }
+}
+
+/* 设置页底部「关于」与「最近更新」：让版本号和这版改了什么在界面上看得见 */
+.about-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 9px;
+  border-radius: 8px;
+  background: var(--bg-sunk, rgba(128, 128, 150, 0.1));
+  font-size: 11.5px;
+}
+.about-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink-3);
+}
+.about-row b {
+  color: var(--ink-1);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.about-links {
+  display: flex;
+  gap: 10px;
+  margin-top: 2px;
+}
+.about-links a {
+  color: var(--accent, #6a7cff);
+  text-decoration: none;
+  font-size: 11.5px;
+}
+.about-links a:hover {
+  text-decoration: underline;
+}
+.update-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.update-list li {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding-left: 9px;
+  border-left: 2px solid var(--accent, #6a7cff);
+  line-height: 1.45;
+}
+.update-list b {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+.update-list span {
+  font-size: 11px;
+  color: var(--ink-3);
 }

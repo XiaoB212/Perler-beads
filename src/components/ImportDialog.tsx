@@ -37,6 +37,7 @@ export interface ImportSeed {
   saturation: number;
   transparentWhite: boolean;
   whiteThreshold: number;
+  speckle: boolean;
   useDocPalette: boolean;
   brandKey: string;
 }
@@ -156,6 +157,8 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   // 用户看到的「中间一块块没色号」多数就是这么来的。需要去白底再手动打开。
   const [transparentWhite, setTransparentWhite] = useState(seed?.transparentWhite ?? false);
   const [whiteThreshold, setWhiteThreshold] = useState(seed?.whiteThreshold ?? 242);
+  // 去零散单颗：抖动留下的孤立点最费眼，默认清掉
+  const [speckle, setSpeckle] = useState(seed?.speckle ?? true);
   // 参考比例（1 颗豆 ≈ 原图几个像素）与豆子规格：只当辅助参考，帮用户估成品多大
   const [ratioText, setRatioText] = useState('2');
   const [beadMm, setBeadMm] = useState(5);
@@ -311,6 +314,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
         saturation,
         transparentWhite,
         whiteThreshold,
+        speckle,
         palette,
         mask: activeMask ?? undefined,
       });
@@ -329,6 +333,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
     saturation,
     transparentWhite,
     whiteThreshold,
+    speckle,
     palette,
     cropRect,
     activeMask,
@@ -747,7 +752,10 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
   const autoCut = () => {
     const data = sampledRef.current;
     if (!data) return;
-    const m = backgroundMask(data, width, height, tolerance);
+    // 已经框选过就把选区传进去：只吃和选区边界相连的背景，
+    // 人物内部被围住的那块留着，不会在人物身上挖出没有色号的洞。
+    const keep = mask && mask.length === width * height ? mask : undefined;
+    const m = backgroundMask(data, width, height, tolerance, keep);
     workMaskRef.current = m;
     setMask(m.slice());
     drawMask();
@@ -907,6 +915,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
         saturation,
         transparentWhite,
         whiteThreshold,
+        speckle,
         useDocPalette,
         brandKey,
       });
@@ -922,7 +931,7 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
         <div className="dialog-head">
           <div className="dialog-title">
             <h2>以图生图 · 图片转图纸</h2>
-            <p>上传图片，自动量化为拼豆色号，可实时预览与微调</p>
+            <p>上传图片 → 裁切 / 抠图 → 生成图纸：抠掉的地方不配色、不算豆子、也不占板子</p>
           </div>
           <button className="dialog-close" onClick={onClose}>
             <IconClose width={16} height={16} />
@@ -944,6 +953,9 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
               <IconImage />
               <b>点击选择或拖入图片</b>
               <span>支持 PNG / JPG / WebP / GIF · 图片不会上传到任何服务器</span>
+              <span className="dropzone-tip">
+                载入之后可以抠图：框选 / 魔棒 / 笔刷修边 / 一键抠掉背景，抠掉的格子不配色、不算豆子、也不占板子
+              </span>
               <input
                 ref={fileRef}
                 type="file"
@@ -1147,6 +1159,10 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
                       }也可以用「抠掉 / 补回」笔刷一点点修边。`
                     : `抠完还剩 ${width * height - cutCount} 格可拼；拖动「原图」可以只取画面的一部分（滚轮缩放），
                 周边空白多的图建议先缩放框住主体，再一键抠背景。`}
+              </div>
+              <div className="cut-tip" style={{ opacity: 0.85 }}>
+                想抠得更准？可以先在 remove.bg、佐糖这类抠图网站把主体抠好、导出透明 PNG 再拖进来 ——
+                <b>透明的地方会自动算抠掉</b>，不用在这里再画一遍。
               </div>
             </div>
           )}
@@ -1381,6 +1397,21 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
                 )}
 
                 <div className="field">
+                  <label>颗粒感</label>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }} onClick={() => setSpeckle((v) => !v)}>
+                    <span className={'checkbox' + (speckle ? ' on' : '')}>
+                      {speckle ? (
+                        <svg viewBox="0 0 16 16" width="10" height="10">
+                          <path d="M2 8.5 L6 12 L14 3.5" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" />
+                        </svg>
+                      ) : null}
+                    </span>
+                    <span>去掉零散单颗</span>
+                  </div>
+                  <span className="hint">四面都是同一个色号时并过去。抖动出来的孤点最费眼，关掉可保留更多细节</span>
+                </div>
+
+                <div className="field">
                   <label>采样方式</label>
                   <div className="segmented" style={{ alignSelf: 'flex-start' }}>
                     <button className={sample === 'average' ? 'active' : ''} onClick={() => setSample('average')}>
@@ -1443,7 +1474,11 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
                     <span className={'checkbox' + (transparentWhite ? ' on' : '')}>
                       <IconCheck width={11} height={11} />
                     </span>
-                    接近纯白的背景转为空豆
+                    去掉连成片的白色背景
+                  </div>
+                  <div className="hint-line">
+                    只去「从画布边缘 / 选区边界能走到的白」；被人围住的白（高光、白衣服）留着，
+                    所以选区内不会出现没有色号的洞。
                   </div>
                   {transparentWhite && (
                     <div className="slider-row">
@@ -1507,7 +1542,9 @@ export default function ImportDialog({ onClose, initialFile, initialSeed, onSeed
 
         <div className="dialog-foot">
           <span style={{ fontSize: 11, color: 'var(--ink-3)' }}>
-            {img ? '导入后将替换当前画布内容，可用 Ctrl+Z 撤销' : '选择图片后可调整参数'}
+            {img
+              ? '生成后想再改范围，点顶栏「重调图片」就能带着这次的裁切和抠图回来；也可用 Ctrl+Z 撤销'
+              : '选择图片后可调整参数'}
           </span>
           <div className="spacer" />
           <button className="btn" onClick={onClose}>

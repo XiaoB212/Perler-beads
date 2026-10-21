@@ -1,7 +1,7 @@
 {
   "name": "perler-studio",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "拼豆工作室 — 本地优先的拼豆图纸编辑器（画布 / 以图生图 / 用量统计 / 进度勾选 / 多格式导出）",
   "scripts": {

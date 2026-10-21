@@ -394,6 +394,59 @@ export default function SettingsPanel({
         onChange={(e) => setNotes(e.target.value)}
         style={{ fontSize: 12 }}
       />
+
+      <div className="divider" />
+      <div className="panel-head">
+        <span className="panel-title">关于</span>
+      </div>
+      <div className="about-box">
+        <div className="about-row">
+          <span>版本</span>
+          <b>v{__APP_VERSION__}</b>
+        </div>
+        <div className="about-row">
+          <span>构建</span>
+          <b>{__APP_BUILD__}</b>
+        </div>
+        <div className="about-links">
+          <a href="https://xiaob212.github.io/Perler-beads/" target="_blank" rel="noreferrer">
+            在线版
+          </a>
+          <a href="https://github.com/XiaoB212/Perler-beads" target="_blank" rel="noreferrer">
+            GitHub
+          </a>
+        </div>
+      </div>
+
+      <div className="panel-head">
+        <span className="panel-title">最近更新</span>
+      </div>
+      <ul className="update-list">
+        <li>
+          <b>透明 PNG 自动抠掉</b>
+          <span>在抠图网站抠好、导出透明 PNG 再拖进来，透明的地方直接算抠掉，不用再画一遍</span>
+        </li>
+        <li>
+          <b>去掉零散单颗</b>
+          <span>抖动留下的孤点自动并到邻居色，图案更干净，色号数基本不变</span>
+        </li>
+        <li>
+          <b>导入图片可以抠图了</b>
+          <span>框选 / 魔棒 / 笔刷 / 一键抠背景；抠掉的格子不配色、不算豆子、也不占板子</span>
+        </li>
+        <li>
+          <b>重调图片</b>
+          <span>生成完还能带着上次的裁切和抠图回到对话框接着改，不用重新找图</span>
+        </li>
+        <li>
+          <b>PDF 和 PNG / SVG 对齐</b>
+          <span>水印不再印地址，页脚去掉打印提示与 50 mm 校准尺，一板一页每页带本板用量</span>
+        </li>
+        <li>
+          <b>大图导出修好了</b>
+          <span>两万格以上的 PNG 不再静默失败；单格像素会自动降到浏览器画得出来的尺寸</span>
+        </li>
+      </ul>
     </div>
   );
 }

@@ -29,6 +29,12 @@ export interface QuantizeOptions {
    * 被抠掉的格子既不算颗粒、也不参与配色，用来「框选内容、去掉多余的板子」。
    */
   mask?: Uint8Array;
+  /**
+   * 去掉零散单颗：四面邻居都是同一个色号时，把它并进去。
+   * 照片抖动之后总会留下一些孤零零的杂色点，一颗一颗挑豆子时最烦这些，
+   * 而且它们正是「看起来和原图差很多」的颗粒感来源。
+   */
+  speckle?: boolean;
 }
 
 export const DEFAULT_QUANTIZE: Omit<QuantizeOptions, 'width' | 'height' | 'palette'> = {
@@ -42,6 +48,7 @@ export const DEFAULT_QUANTIZE: Omit<QuantizeOptions, 'width' | 'height' | 'palet
   transparentWhite: false,
   whiteThreshold: 246,
   edgeBoost: 0,
+  speckle: true,
 };
 
 function adjust(r: number, g: number, b: number, brightness: number, contrast: number, saturation: number) {
@@ -162,6 +169,8 @@ export function backgroundMask(
   width: number,
   height: number,
   tolerance = 26,
+  /** 当前保留区域（1=保留）：它的边界也会成为扩散起点 */
+  keep?: Uint8Array,
 ): Uint8Array {
   const total = width * height;
   const mask = new Uint8Array(total).fill(1);
@@ -215,6 +224,22 @@ export function backgroundMask(
   for (let y = 0; y < height; y++) {
     seed(y * width);
     seed(y * width + width - 1);
+  }
+  // 用户划了选区时，选区的边界也算起点：只吃掉和框边相连的背景，
+  // 被人物围住的那一块留着 —— 免得把人物内部挖出没有色号的洞。
+  if (keep && keep.length === total) {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const i = y * width + x;
+        if (!keep[i]) continue;
+        const onEdge =
+          (x > 0 && !keep[i - 1]) ||
+          (x < width - 1 && !keep[i + 1]) ||
+          (y > 0 && !keep[i - width]) ||
+          (y < height - 1 && !keep[i + width]);
+        if (onEdge) seed(i);
+      }
+    }
   }
   while (stack.length) {
     const i = stack.pop()!;
@@ -415,12 +440,33 @@ export function quantizeImage(
     alpha[i] = a;
   }
 
-  // 背景判定：只把「和画布边缘连通、而且是一整块够大的白色」当背景。
+  // 背景判定：只把「和画布边缘 / 选区边界连通、而且是一整块够大的白色」当背景。
   // 1) 旧写法把所有够白的像素都判成空格 → 人物脸上的高光、白衣服、眼睛反光
   //    全被挖成洞，这就是「中间还是会有不显示色号的部分」。
   // 2) 只做连通扩散还不够：缩图时白背景会顺着细缝渗进图案内部，形成一条条白脉，
-  //    把整块图案蛀空。所以先给候选白做连通块标记，只有「碰到画布边缘、且面积
+  //    把整块图案蛀空。所以先给候选白做连通块标记，只有「从边界能走到、且面积
   //    不小于总面积 0.05%」的块才算背景，细白脉会被当成普通像素去配色。
+  // 3) 用户框选之后，「选区边界」也算扩散起点：框内的白底只要挨着框边就会被吃掉，
+  //    而被人围住的白（脸、手、白衣服）留着 —— 既有「框内全部有颜色」，
+  //    又不会把框里整片白都算成豆子。
+  const mask0 = opts.mask && opts.mask.length === total ? opts.mask : null;
+
+  // 带透明通道的图（在抠图网站导出透明 PNG 再拖进来）直接算抠掉。
+  // 用户不需要为了「透明背景」再手动框选一次。
+  let alphaCut = false;
+  for (let i = 0; i < total; i++) {
+    if (alpha[i] < 128) {
+      alphaCut = true;
+      break;
+    }
+  }
+  let mask = mask0;
+  if (alphaCut) {
+    const m = mask0 ? new Uint8Array(mask0) : new Uint8Array(total).fill(1);
+    for (let i = 0; i < total; i++) if (alpha[i] < 128) m[i] = 0;
+    mask = m;
+  }
+
   const isBg = new Uint8Array(total);
   if (opts.transparentWhite) {
     const thr = opts.whiteThreshold;
@@ -431,29 +477,53 @@ export function quantizeImage(
       const b = rgb[i * 3 + 2];
       if (r >= thr && g >= thr && b >= thr) cand[i] = 1;
     }
+    const seeds = new Uint8Array(total);
+    const seedAt = (i: number) => {
+      if (cand[i]) seeds[i] = 1;
+    };
+    for (let x = 0; x < width; x++) {
+      seedAt(x);
+      seedAt((height - 1) * width + x);
+    }
+    for (let y = 0; y < height; y++) {
+      seedAt(y * width);
+      seedAt(y * width + width - 1);
+    }
+    if (mask) {
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const i = y * width + x;
+          if (!mask[i]) continue;
+          const onSelEdge =
+            (x > 0 && !mask[i - 1]) ||
+            (x < width - 1 && !mask[i + 1]) ||
+            (y > 0 && !mask[i - width]) ||
+            (y < height - 1 && !mask[i + width]);
+          if (onSelEdge) seedAt(i);
+        }
+      }
+    }
     const minArea = Math.max(6, Math.floor(total * 0.0005));
     const seen = new Uint8Array(total);
     const stack: number[] = [];
     const region: number[] = [];
     for (let s = 0; s < total; s++) {
-      if (!cand[s] || seen[s]) continue;
+      if (!seeds[s] || seen[s]) continue;
       region.length = 0;
       stack.length = 0;
       stack.push(s);
       seen[s] = 1;
-      let touchesEdge = false;
       while (stack.length) {
         const i = stack.pop()!;
         region.push(i);
         const x = i % width;
         const y = (i / width) | 0;
-        if (x === 0 || y === 0 || x === width - 1 || y === height - 1) touchesEdge = true;
         if (x > 0 && cand[i - 1] && !seen[i - 1]) { seen[i - 1] = 1; stack.push(i - 1); }
         if (x < width - 1 && cand[i + 1] && !seen[i + 1]) { seen[i + 1] = 1; stack.push(i + 1); }
         if (y > 0 && cand[i - width] && !seen[i - width]) { seen[i - width] = 1; stack.push(i - width); }
         if (y < height - 1 && cand[i + width] && !seen[i + width]) { seen[i + width] = 1; stack.push(i + width); }
       }
-      if (touchesEdge && region.length >= minArea) {
+      if (region.length >= minArea) {
         for (const i of region) isBg[i] = 1;
       }
     }
@@ -465,8 +535,7 @@ export function quantizeImage(
   if (!palette.length) return { cells, palette, usedCount: 0 };
 
   // 用户手抠的范围优先于自动白底：抠掉的格子既不配色也不算颗数
-  const mask = opts.mask;
-  if (mask && mask.length === total) {
+  if (mask) {
     for (let i = 0; i < total; i++) if (!mask[i]) isBg[i] = 1;
   }
 
@@ -590,6 +659,33 @@ export function quantizeImage(
         spread(x + 1, y + 1, 1 / 16);
       }
     }
+  }
+
+  // 去零散单颗：四面邻居都是同一个色号时并过去。
+  // 抖动留下的孤立点最费眼、也最吃豆子，清两遍就基本干净了。
+  if (opts.speckle) {
+    const nb = [0, 0, 0, 0];
+    for (let pass = 0; pass < 2; pass++) {
+      let changed = 0;
+      for (let y = 1; y < height - 1; y++) {
+        for (let x = 1; x < width - 1; x++) {
+          const i = y * width + x;
+          const c = cells[i];
+          if (!c) continue;
+          nb[0] = cells[i - 1];
+          nb[1] = cells[i + 1];
+          nb[2] = cells[i - width];
+          nb[3] = cells[i + width];
+          if (!nb[0] || nb[0] !== nb[1] || nb[0] !== nb[2] || nb[0] !== nb[3]) continue;
+          if (nb[0] === c) continue;
+          cells[i] = nb[0];
+          changed++;
+        }
+      }
+      if (!changed) break;
+    }
+    used.clear();
+    for (let i = 0; i < total; i++) if (cells[i] > 0) used.add(cells[i] - 1);
   }
 
   // 压缩色板：只保留被使用的颜色，保持原顺序

@@ -1,9 +1,21 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+
+// 版本号只写 package.json 一处，构建时塞进产物，界面上直接显示，
+// 这样「线上到底跑的是不是最新一版」一眼就能看出来（之前没有任何地方显示版本）。
+const pkg = JSON.parse(readFileSync(new URL('./package.json', import.meta.url), 'utf8')) as {
+  version?: string;
+};
+const buildStamp = new Date().toISOString().slice(0, 10);
 
 // 使用相对 base，保证可部署在 GitHub Pages 的任意子路径（用户名.github.io/仓库名/）
 export default defineConfig({
   base: './',
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version ?? '0.0.0'),
+    __APP_BUILD__: JSON.stringify(buildStamp),
+  },
   plugins: [react()],
   build: {
     outDir: 'dist',

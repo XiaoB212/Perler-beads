@@ -569,7 +569,12 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
             </div>
             <div className="brand-text">
               <b>拼豆工作室</b>
-              <span>Perler Studio</span>
+              <span>
+                Perler Studio
+                <em className="brand-ver" title={`构建于 ${__APP_BUILD__}`}>
+                  v{__APP_VERSION__}
+                </em>
+              </span>
             </div>
           </div>
 
@@ -620,14 +625,18 @@ const setOnlineMode = useEditor((s) => s.setOnlineMode);
             <button className="btn sm hide-sm" onClick={() => setDialog('new')} title="新建图纸 (N)">
               <IconPlus width={13} height={13} /> 新建
             </button>
-            <button className="btn sm hide-sm" onClick={() => openImport()} title="图片转图纸 (Ctrl+O)">
+            <button
+              className="btn sm hide-sm"
+              onClick={() => openImport()}
+              title="图片转图纸 (Ctrl+O) — 载入后可以框选 / 魔棒 / 笔刷抠图"
+            >
               <IconImage width={13} height={13} /> 图片转图纸
             </button>
             {lastSeed && (
               <button
                 className="btn sm hide-sm"
                 onClick={() => openImport(lastSeed)}
-                title="回到上次的图片，重新选范围 / 重新抠图"
+                title="回到上次的图片，重新选范围 / 重新抠图（生成后不满意就点这里）"
               >
                 <IconWand width={13} height={13} /> 重调图片
               </button>
